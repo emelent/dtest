@@ -1,0 +1,101 @@
+name: Release
+
+# On every push to main: run the tests, work out the next semver tag from the
+# commit messages (Conventional Commits), tag, cross-compile and publish a
+# GitHub release with archives and checksums.
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: go vet ./...
+      - run: go test ./...
+
+  release:
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # full history and tags for the version calculation
+
+      - name: Determine next version
+        id: version
+        run: |
+          set -euo pipefail
+          next=$(.github/scripts/next-version.sh)
+          bump=$(.github/scripts/next-version.sh --bump)
+          echo "bump=$bump" >> "$GITHUB_OUTPUT"
+          echo "tag=$next"   >> "$GITHUB_OUTPUT"
+          if [ -z "$next" ]; then
+            echo "No release-worthy commits since the last tag; skipping." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Releasing **$next** ($bump bump)." >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - uses: actions/setup-go@v5
+        if: steps.version.outputs.tag != ''
+        with:
+          go-version-file: go.mod
+
+      - name: Build binaries
+        if: steps.version.outputs.tag != ''
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          for p in linux/amd64 linux/arm64 darwin/amd64 darwin/arm64 windows/amd64; do
+            os=${p%/*}; arch=${p#*/}
+            out="dtest-${TAG}-${os}-${arch}"
+            bin=dtest; [ "$os" = windows ] && bin=dtest.exe
+            echo "building $p"
+            CGO_ENABLED=0 GOOS=$os GOARCH=$arch \
+              go build -trimpath -ldflags "-s -w -X main.version=${TAG}" -o "dist/${out}/${bin}" .
+            cp README.md "dist/${out}/"
+            if [ "$os" = windows ]; then
+              (cd dist && zip -qr "${out}.zip" "${out}")
+            else
+              tar -C dist -czf "dist/${out}.tar.gz" "${out}"
+            fi
+            rm -rf "dist/${out}"
+          done
+          (cd dist && sha256sum * > SHA256SUMS.txt && cat SHA256SUMS.txt)
+
+      - name: Tag
+        if: steps.version.outputs.tag != ''
+        env:
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin "$TAG"
+
+      - name: Create GitHub release
+        if: steps.version.outputs.tag != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.version.outputs.tag }}
+        run: |
+          set -euo pipefail
+          gh release create "$TAG" dist/* \
+            --title "$TAG" \
+            --generate-notes \
+            --verify-tag

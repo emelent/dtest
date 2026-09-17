@@ -1,3 +1,4 @@
 /dtest
+/dist
 sample/**/bin/
 sample/**/obj/

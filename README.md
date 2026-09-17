@@ -169,7 +169,21 @@ cd sample && ../dtest        # or let it find Shop.slnx itself
 ```sh
 make test            # go test ./...
 make fmt vet         # gofmt and go vet
+make build-all       # cross-compile into dist/ for the platforms the release publishes
 ```
+
+Pull requests run `.github/workflows/ci.yml`: gofmt must leave nothing to
+format, and `go vet`, the tests and a build must pass.
+
+**Commit messages drive releases.** Every push to `main` runs
+`.github/workflows/release.yml`, which tests, works out the next version
+from the Conventional Commit messages since the last `v*` tag, tags,
+cross-compiles for Linux, macOS and Windows and publishes a GitHub release
+with archives and checksums. `feat!:` or a `BREAKING CHANGE` footer bumps
+the major version, `feat:` the minor, `fix:` / `perf:` / `refactor:` /
+`revert:` and unprefixed messages the patch; `chore:`, `docs:`, `ci:`,
+`test:`, `style:` and `build:` alone release nothing. Preview the next tag
+with `.github/scripts/next-version.sh`.
 
 ```
 main.go              flags, target discovery, tea.NewProgram
