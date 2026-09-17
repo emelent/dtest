@@ -226,7 +226,7 @@ func (m *Model) renderNodeLog(n *tree.Node) []string {
 		head += " " + styleDim.Render(formatDuration(d))
 	}
 	// Then the section's tally, as the summary prints it.
-	lines = append(lines, head, "    "+strings.Join(summaryParts(c), styleDim.Render(" | ")))
+	lines = append(lines, head, "    "+strings.Join(summaryParts(c, true), styleDim.Render(" | ")))
 	var failed []*tree.Node
 	for _, l := range n.Leaves() {
 		if l.Status() == tree.StatusFailed && l.Result != nil {
@@ -460,27 +460,25 @@ func (m *Model) renderHeader() string {
 	return fit(" "+badgeInfo.Render("DTEST")+" "+styleBold.Render(m.name), m.width)
 }
 
-// statsLines is the state line (always present, so the block below never
-// moves), then vitest's summary block, then the key hint; it is
-// right-aligned beside the tree.
+// statsLines is the block beside the tree: the state line, then the
+// counts stacked one per row, the start time and duration, and the key
+// hint. Every row is always present so the block never changes shape.
 func (m *Model) statsLines() []string {
-	width := max(40, m.width-32) // leave the tree at least 30 columns
-	lines := []string{m.stateLine(), ""}
-	if !m.batchStart.IsZero() {
-		var pc tree.Counts
-		for _, p := range m.tree.Projects {
-			pc.Total++
-			switch p.Status() {
-			case tree.StatusRunning:
-				pc.Running++
-			case tree.StatusFailed:
-				pc.Failed++
-			case tree.StatusPassed:
-				pc.Passed++
-			case tree.StatusSkipped:
-				pc.Skipped++
-			}
+	var pc tree.Counts
+	for _, p := range m.tree.Projects {
+		pc.Total++
+		switch p.Status() {
+		case tree.StatusFailed:
+			pc.Failed++
+		case tree.StatusPassed:
+			pc.Passed++
+		case tree.StatusSkipped:
+			pc.Skipped++
 		}
+	}
+	c := m.tree.Counts()
+	start, dur := styleDim.Render("–"), styleDim.Render("–")
+	if !m.batchStart.IsZero() {
 		end := m.batchEnd
 		if end.IsZero() {
 			end = now()
@@ -489,16 +487,28 @@ func (m *Model) statsLines() []string {
 		for _, p := range m.tree.Projects {
 			tests += p.Duration()
 		}
-		lines = append(lines, wrapSummary("Test Projects", summaryParts(pc), width)...)
-		lines = append(lines, wrapSummary("Tests", summaryParts(m.tree.Counts()), width)...)
-		lines = append(lines,
-			summaryLabel("Start at")+m.batchStart.Format("15:04:05"),
-			summaryLabel("Duration")+formatDuration(end.Sub(m.batchStart))+styleDim.Render(fmt.Sprintf(" (tests %s)", formatDuration(tests))))
-	} else {
-		c := m.tree.Counts()
-		lines = append(lines, summaryLabel("Tests")+styleDim.Render(fmt.Sprintf("(%d)", c.Total)))
+		start = m.batchStart.Format("15:04:05")
+		dur = formatDuration(end.Sub(m.batchStart)) + styleDim.Render(fmt.Sprintf(" (tests %s)", formatDuration(tests)))
 	}
-	return append(lines, "", strings.Repeat(" ", 7)+styleDim.Render("press ? to show help, press q to quit"))
+	count := func(n int, style lipgloss.Style) string {
+		if n == 0 {
+			return styleDim.Render("0")
+		}
+		return style.Bold(true).Render(fmt.Sprint(n))
+	}
+	return []string{
+		m.stateLine(),
+		"",
+		summaryLabel("Test Projects") + strings.Join(summaryParts(pc, false), styleDim.Render(" | ")),
+		summaryLabel("Tests") + fmt.Sprint(c.Total),
+		summaryLabel("Failed") + count(c.Failed, styleFailed),
+		summaryLabel("Skipped") + count(c.Skipped, styleSkipped),
+		summaryLabel("Passed") + count(c.Passed, stylePassed),
+		summaryLabel("Start at") + start,
+		summaryLabel("Duration") + dur,
+		"",
+		strings.Repeat(" ", 7) + styleDim.Render("press ? to show help, press q to quit"),
+	}
 }
 
 // summaryLabelW is the width of the summary's label column: the longest
@@ -509,36 +519,12 @@ func summaryLabel(s string) string {
 	return styleDim.Render(fmt.Sprintf("%*s", summaryLabelW-2, s)) + "  "
 }
 
-// wrapSummary lays a labelled list of parts out as "label  a | b | c",
-// continuing on indented lines when the pane is too narrow for one.
-func wrapSummary(label string, parts []string, width int) []string {
-	sep := styleDim.Render(" | ")
-	var lines []string
-	cur := summaryLabel(label)
-	curW := summaryLabelW
-	first := true
-	for _, p := range parts {
-		pw := ansi.StringWidth(p)
-		if !first && curW+3+pw > width {
-			lines = append(lines, cur)
-			cur, curW, first = strings.Repeat(" ", summaryLabelW), summaryLabelW, true
-		}
-		if !first {
-			cur += sep
-			curW += 3
-		}
-		cur += p
-		curW += pw
-		first = false
-	}
-	return append(lines, cur)
-}
-
 // summaryParts is vitest's "1 failed | 1 passed | 2 skipped (4)" as its
 // pieces, listing only the non-zero groups, each bold in its colour, with
-// the total attached to the last one. Running tests count as not run, so
-// the line does not keep changing while a run is in progress.
-func summaryParts(c tree.Counts) []string {
+// the total attached to the last one. With notRun the tests without a
+// result are counted too (running ones included, so the line does not keep
+// changing during a run); the bottom summary leaves them out.
+func summaryParts(c tree.Counts, notRun bool) []string {
 	var parts []string
 	if c.Failed > 0 {
 		parts = append(parts, styleFailed.Bold(true).Render(fmt.Sprintf("%d failed", c.Failed)))
@@ -549,7 +535,7 @@ func summaryParts(c tree.Counts) []string {
 	if c.Skipped > 0 {
 		parts = append(parts, styleSkipped.Bold(true).Render(fmt.Sprintf("%d skipped", c.Skipped)))
 	}
-	if rest := c.Total - c.Failed - c.Passed - c.Skipped; rest > 0 {
+	if rest := c.Total - c.Failed - c.Passed - c.Skipped; notRun && rest > 0 {
 		parts = append(parts, styleDim.Render(fmt.Sprintf("%d not run", rest)))
 	}
 	if len(parts) == 0 {
@@ -559,11 +545,10 @@ func summaryParts(c tree.Counts) []string {
 	return parts
 }
 
-// stateLine is what dtest is doing: a status message, building or listing
-// as plain text, or a PASS / FAIL badge once runs have finished. It is
-// empty before the first run and while tests run: the spinners in the tree
-// and the running counts already show that, and changing text here made
-// the block jump.
+// stateLine is what dtest is doing: a status message, or building or
+// listing as plain text. It is empty otherwise, before, during and after
+// runs: the tree's spinners and the stacked counts already say it, and
+// changing text here made the block jump.
 func (m *Model) stateLine() string {
 	switch {
 	case m.status != "":
@@ -576,12 +561,6 @@ func (m *Model) stateLine() string {
 		return "       Building " + filepath.Base(m.cfg.Target) + "…"
 	case m.loading > 0:
 		return "       Listing tests…"
-	case m.run != nil:
-		return ""
-	case m.runsDone && m.tree.Counts().Failed > 0:
-		return " " + badgeFail.Render("FAIL") + " Tests failed."
-	case m.runsDone:
-		return " " + badgePass.Render("PASS") + " Tests passed."
 	}
 	return ""
 }

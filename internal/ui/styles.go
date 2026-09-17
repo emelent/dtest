@@ -27,9 +27,7 @@ var (
 	styleActual   = lipgloss.NewStyle().Foreground(colRed)
 	styleLocation = lipgloss.NewStyle().Foreground(colCyan)
 
-	// Badges, as vitest draws RUN / PASS / FAIL.
-	badgeRun  = lipgloss.NewStyle().Background(colYellow).Foreground(colBlack).Bold(true).Padding(0, 1)
-	badgePass = lipgloss.NewStyle().Background(colGreen).Foreground(colBlack).Bold(true).Padding(0, 1)
+	// Badges, as vitest draws FAIL.
 	badgeFail = lipgloss.NewStyle().Background(colRed).Foreground(colWhite).Bold(true).Padding(0, 1)
 	badgeInfo = lipgloss.NewStyle().Background(colCyan).Foreground(colBlack).Bold(true).Padding(0, 1)
 )

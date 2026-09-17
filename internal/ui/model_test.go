@@ -89,9 +89,10 @@ func TestLayoutAndNavigation(t *testing.T) {
 	}
 	v := view(m)
 	containsAll(t, v, "DTEST", "⎯⎯ Log  Alpha.Tests ⎯", "⎯⎯ Tests ⎯", "▾ Alpha.Tests (5 tests)", "▸ MathTests (4 tests)", "5 not run (5)", "Not run yet",
+		"Test Projects  (1)", "Tests  5", "Failed  0", "Skipped  0", "Passed  0", "Start at  –", "Duration  –",
 		"press ? to show help, press q to quit")
-	if strings.Contains(v, "Start at") || strings.Contains(v, "Summary") || strings.Contains(v, "│") || strings.Contains(v, "Ready") || strings.Count(v, "DTEST") != 1 {
-		t.Errorf("one bottom pane, no summary block or extra text before the first run:\n%s", v)
+	if strings.Contains(v, "Summary") || strings.Contains(v, "│") || strings.Contains(v, "Ready") || strings.Count(v, "DTEST") != 1 {
+		t.Errorf("one bottom pane and no extra text before the first run:\n%s", v)
 	}
 	// The summary block sits flush with the right edge of the bottom pane,
 	// its widest line ending at the last column.
@@ -308,7 +309,7 @@ func TestRunFlow(t *testing.T) {
 		t.Fatalf("class should be running: %+v", class.Counts())
 	}
 	v := view(m)
-	containsAll(t, v, "(5 tests | 4 running)", "19:10:48", "Tests  5 not run (5)")
+	containsAll(t, v, "(5 tests | 4 running)", "19:10:48", "Tests  5", "Failed  0", "Passed  0")
 	for _, l := range strings.Split(v, "\n") {
 		summary := strings.Contains(l, "Test Projects  ") || strings.Contains(l, "   Tests  ")
 		if strings.Contains(v, "RUN") || strings.Contains(v, "Running") || (summary && strings.Contains(l, "running")) {
@@ -356,10 +357,15 @@ func TestRunFlow(t *testing.T) {
 		"× Fails 0.001s",
 		"▸ Theory (2 tests | 1 skipped)",
 		"Test Projects  1 failed (1)",
-		"Tests  1 failed | 3 passed | 1 skipped | 1 not run (6)",
+		"Tests  6",
+		"Failed  1",
+		"Skipped  1",
+		"Passed  3",
 		"Duration  2m34s (tests 0.033s)",
-		"FAIL  Tests failed.",
 	)
+	if strings.Contains(v, "Tests failed.") || strings.Contains(v, "Tests passed.") {
+		t.Error("no result line in the stats")
+	}
 	if strings.Contains(v, "(n: 1)") {
 		t.Error("theory without failures should be folded")
 	}
