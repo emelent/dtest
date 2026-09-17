@@ -80,7 +80,7 @@ func (m *Model) handleTreeKey(key string) (bool, tea.Cmd) {
 		if n == nil {
 			return true, nil
 		}
-		if !n.IsLeaf() && n.Expanded && m.query == "" {
+		if !n.IsLeaf() && n.Expanded && !m.filtered() {
 			n.Expanded = false
 		} else if n.Parent != nil {
 			m.selectNode(n.Parent)
@@ -89,19 +89,20 @@ func (m *Model) handleTreeKey(key string) (bool, tea.Cmd) {
 		if n == nil || n.IsLeaf() {
 			return true, nil
 		}
-		if !n.Expanded && m.query == "" {
+		if !n.Expanded && !m.filtered() {
 			n.Expanded = true
 		} else if len(n.Children) > 0 {
 			m.move(1)
 		}
 	case "space":
-		if n != nil && !n.IsLeaf() && m.query == "" {
+		if n != nil && !n.IsLeaf() && !m.filtered() {
 			n.Expanded = !n.Expanded
 		}
 	case "t", "/":
 		m.filtering = true
 	case "esc":
 		m.query = ""
+		m.statusFilter = tree.StatusNone
 	default:
 		return false, nil
 	}
@@ -150,10 +151,17 @@ func (m *Model) handleCommonKey(key string) (tea.Model, tea.Cmd) {
 		if n := m.current(); n != nil {
 			return m, m.enqueue([]*tree.Node{n})
 		}
-	case "a":
+	case "A":
 		return m, m.enqueue(m.tree.Projects)
-	case "f":
+	case "a":
+		m.query = ""
+		m.statusFilter = tree.StatusNone
+	case "F":
 		return m, m.runFailed()
+	case "f":
+		m.toggleStatusFilter(tree.StatusFailed)
+	case "s":
+		m.toggleStatusFilter(tree.StatusSkipped)
 	case "x":
 		return m, m.cancelRun()
 	case "n":

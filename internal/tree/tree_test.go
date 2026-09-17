@@ -54,7 +54,7 @@ func TestBuildAndVisible(t *testing.T) {
 	}
 	// Projects start expanded with their classes collapsed; class labels drop
 	// the project-name prefix.
-	got := names(tr.Visible(""))
+	got := names(tr.Visible("", StatusNone))
 	want := "Alpha.Tests| Alpha.Other.X| MathTests| SlowTests"
 	if got != want {
 		t.Fatalf("Visible =\n%s\nwant\n%s", got, want)
@@ -62,7 +62,7 @@ func TestBuildAndVisible(t *testing.T) {
 	for _, c := range p.Children {
 		c.Expanded = true
 	}
-	got = names(tr.Visible(""))
+	got = names(tr.Visible("", StatusNone))
 	want = "Alpha.Tests| Alpha.Other.X|  Y| MathTests|  Adds|  Theory| SlowTests|  Waits"
 	if got != want {
 		t.Fatalf("expanded classes =\n%s\nwant\n%s", got, want)
@@ -72,7 +72,7 @@ func TestBuildAndVisible(t *testing.T) {
 		t.Fatalf("theory node = %+v", theory)
 	}
 	theory.Expanded = true
-	if got := names(tr.Visible("")); !strings.Contains(got, "Theory|   (n: 1)|   (n: 2)|") {
+	if got := names(tr.Visible("", StatusNone)); !strings.Contains(got, "Theory|   (n: 1)|   (n: 2)|") {
 		t.Errorf("expanded theory: %s", got)
 	}
 	if c := p.Counts(); c.Total != 5 {
@@ -80,14 +80,14 @@ func TestBuildAndVisible(t *testing.T) {
 	}
 	// Filtering shows matching leaves and their ancestors only, and the
 	// project name matches too.
-	got = names(tr.Visible("waits"))
+	got = names(tr.Visible("waits", StatusNone))
 	if got != "Alpha.Tests| SlowTests|  Waits" {
 		t.Errorf("filtered = %s", got)
 	}
-	if got := len(tr.Visible("alpha.tests")); got != 10 {
+	if got := len(tr.Visible("alpha.tests", StatusNone)); got != 10 {
 		t.Errorf("project-name filter rows = %d", got)
 	}
-	if got := names(tr.Visible("nomatch")); got != "" {
+	if got := names(tr.Visible("nomatch", StatusNone)); got != "" {
 		t.Errorf("no match = %s", got)
 	}
 }
@@ -204,6 +204,22 @@ func TestSetTestsKeepsStateAndLeafAddsNew(t *testing.T) {
 	}
 }
 
+func TestVisibleByStatus(t *testing.T) {
+	tr, p := sample()
+	tr.Lookup(p, "Alpha.Tests.MathTests.Theory(n: 2)").SetStatus(StatusFailed)
+	tr.Lookup(p, "Alpha.Tests.SlowTests.Waits").SetStatus(StatusSkipped)
+	if got := names(tr.Visible("", StatusFailed)); got != "Alpha.Tests| MathTests|  Theory|   (n: 2)" {
+		t.Errorf("failed only = %s", got)
+	}
+	if got := names(tr.Visible("", StatusSkipped)); got != "Alpha.Tests| SlowTests|  Waits" {
+		t.Errorf("skipped only = %s", got)
+	}
+	// A text query and a status filter combine.
+	if got := names(tr.Visible("theory", StatusSkipped)); got != "" {
+		t.Errorf("combined = %s", got)
+	}
+}
+
 func TestFoldByResult(t *testing.T) {
 	tr, p := sample()
 	for _, c := range p.Children {
@@ -212,7 +228,7 @@ func TestFoldByResult(t *testing.T) {
 	tr.Lookup(p, "Alpha.Tests.MathTests.Theory(n: 2)").SetStatus(StatusFailed)
 	tr.Lookup(p, "Alpha.Tests.SlowTests.Waits").SetStatus(StatusPassed)
 	tr.FoldByResult(p)
-	got := names(tr.Visible(""))
+	got := names(tr.Visible("", StatusNone))
 	want := "Alpha.Tests| Alpha.Other.X| MathTests|  Adds|  Theory|   (n: 1)|   (n: 2)| SlowTests"
 	if got != want {
 		t.Fatalf("folded =\n%s\nwant\n%s", got, want)

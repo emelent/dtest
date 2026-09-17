@@ -103,12 +103,13 @@ type Model struct {
 	statusErr bool
 	statusID  int
 
-	help       bool
-	showOutput bool // append the raw dotnet output to the report
-	filtering  bool
-	query      string
-	pendingG   bool
-	fatal      error
+	help         bool
+	showOutput   bool // append the raw dotnet output to the report
+	filtering    bool
+	query        string
+	statusFilter tree.Status // show only leaves in this status; StatusNone for all
+	pendingG     bool
+	fatal        error
 
 	locations map[string]dotnet.Location
 }
@@ -590,7 +591,7 @@ func (m *Model) selectNode(n *tree.Node) {
 	for p := n.Parent; p != nil; p = p.Parent {
 		p.Expanded = true
 	}
-	m.rows = m.tree.Visible(m.query)
+	m.rows = m.tree.Visible(m.query, m.statusFilter)
 	for i, r := range m.rows {
 		if r == n {
 			m.cursor = i
@@ -598,6 +599,22 @@ func (m *Model) selectNode(n *tree.Node) {
 		}
 	}
 	m.refresh()
+}
+
+// filtered reports whether the tree is narrowed by a query or a status, in
+// which case folding is off since matches are always shown.
+func (m *Model) filtered() bool {
+	return m.query != "" || m.statusFilter != tree.StatusNone
+}
+
+// toggleStatusFilter narrows the tree to leaves in status, or widens it
+// again when that filter is already on.
+func (m *Model) toggleStatusFilter(status tree.Status) {
+	if m.statusFilter == status {
+		m.statusFilter = tree.StatusNone
+	} else {
+		m.statusFilter = status
+	}
 }
 
 // nextFailed moves the tree cursor to the next (or previous) failed test in

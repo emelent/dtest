@@ -51,10 +51,10 @@ ctrl+j/k for their own pane movement.
 
 ## Features
 
-- Run the selected project, class, method or test; `a` runs everything, `f` re-runs only what failed; runs queue up, one `dotnet test` per project
+- Run the selected project, class, method or test; `A` runs everything, `F` re-runs only what failed; runs queue up, one `dotnet test` per project
 - Live status while tests run: the project row spins and everything running beneath it turns cyan, tests waiting in a queued run show ○; ✓ × ↓ arrive as each result comes in; projects, classes and theories carry a fold arrow (▾ / ▸) in the colour of their status, with counts and durations rolled up
 - Open the selected test in Neovim, either a running instance (via the socket in `$nvim_sock`) or one launched in place; a failed test opens at the failing line
-- Filter the tree by test or project name as you type
+- Filter the tree by test or project name as you type, or narrow it to the failed (`f`) or skipped (`s`) tests
 
 ## Requirements
 
@@ -104,12 +104,14 @@ Press `?` in the app for this list.
 | `l` / `h` | Expand / collapse a project, class or theory (`h` on a collapsed node selects its parent) |
 | `space` | Toggle a fold |
 | `enter`, `r` | Run the selected project, class or test |
-| `a` | Run every project |
-| `f` | Re-run only the failed tests |
+| `A` | Run every project |
+| `F` | Re-run only the failed tests |
+| `f` / `s` | Show only the failed / skipped tests |
+| `a` | Show all tests again (`esc` does too) |
 | `x` | Cancel the running tests and drop the queue |
 | `n` / `N` | Next / previous failed test |
 | `o` | Open the selected test in Neovim; a failed test opens at the failing line |
-| `t`, `/` | Filter the tree by test or project name; `enter` keeps the filter, `esc` clears it |
+| `t`, `/` | Filter the tree by test or project name; `enter` keeps the filter, `esc` clears every filter |
 | `v` | Show the raw dotnet output of the selected project instead of its results |
 | `ctrl+r` | Rebuild and list the tests again |
 | `q`, `ctrl+c` | Quit |

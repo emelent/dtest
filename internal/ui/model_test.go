@@ -410,13 +410,34 @@ func TestRunFlow(t *testing.T) {
 	}
 	press(m, "k", "k") // past Extra, which sorts before Fails
 	containsAll(t, view(m), "⎯⎯ Log  Alpha.Tests › MathTests › Adds ⎯", "✓ Passed in 0.032s")
-	// f re-runs the failed tests only; a runs whole projects and queues.
+	// f narrows the tree to failures, s to skipped tests, esc widens it.
 	press(m, "f")
+	if len(m.rows) != 3 || m.rows[2].Name != "Fails" || !strings.Contains(view(m), "Tests  failed only") {
+		t.Fatalf("failed-only rows = %d\n%s", len(m.rows), view(m))
+	}
+	press(m, "s")
+	if len(m.rows) != 4 || m.rows[3].Name != "(n: 2)" || !strings.Contains(view(m), "skipped only") {
+		t.Fatalf("skipped-only rows = %d", len(m.rows))
+	}
+	press(m, "s")
+	if m.statusFilter != tree.StatusNone {
+		t.Fatal("s again clears the status filter")
+	}
+	press(m, "f", "esc")
+	if m.statusFilter != tree.StatusNone {
+		t.Fatal("esc clears the status filter")
+	}
+	press(m, "f", "a")
+	if m.statusFilter != tree.StatusNone || len(m.rows) < 6 {
+		t.Fatal("a shows all tests again")
+	}
+	// F re-runs the failed tests only; A runs whole projects and queues.
+	press(m, "F")
 	<-f.started
 	if f.filter != "FullyQualifiedName=Alpha.Tests.MathTests.Fails" {
 		t.Fatalf("rerun-failed filter = %q", f.filter)
 	}
-	press(m, "a")
+	press(m, "A")
 	if len(m.queue) != 1 || m.queue[0].filter != "" {
 		t.Fatalf("queue = %+v", m.queue)
 	}
@@ -474,7 +495,7 @@ func TestOutputDrawnOnTick(t *testing.T) {
 
 func TestNothingToDo(t *testing.T) {
 	m := newTestModel(t)
-	press(m, "f")
+	press(m, "F")
 	if !strings.Contains(m.status, "No failed tests to re-run") {
 		t.Fatalf("status = %q", m.status)
 	}
@@ -486,6 +507,11 @@ func TestNothingToDo(t *testing.T) {
 	if !strings.Contains(m.status, "Nothing is running") {
 		t.Fatalf("status = %q", m.status)
 	}
+	press(m, "f")
+	if len(m.rows) != 0 || !strings.Contains(view(m), "No failed tests") {
+		t.Fatalf("failed-only with nothing failed: %d rows", len(m.rows))
+	}
+	press(m, "esc")
 }
 
 func TestOutputToggleAndHelp(t *testing.T) {
@@ -507,7 +533,7 @@ func TestOutputToggleAndHelp(t *testing.T) {
 		t.Fatal("v should hide the output again")
 	}
 	press(m, "?")
-	containsAll(t, view(m), "⎯⎯ Usage ⎯", "press f", "rerun only the failed tests", "/tmp/nvim.Sample.sock")
+	containsAll(t, view(m), "⎯⎯ Usage ⎯", "press A", "press F", "rerun only the failed tests", "press f / s", "press a", "/tmp/nvim.Sample.sock")
 	press(m, "j")
 	if m.help || m.cursor != 0 {
 		t.Fatal("any key closes help without acting")

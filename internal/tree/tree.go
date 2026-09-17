@@ -356,18 +356,20 @@ func indexTopLevel(s string, c byte) int {
 	return -1
 }
 
-// Visible flattens the tree into the rows to draw. With an empty query
-// collapsed nodes hide their children; with a query only leaves whose
-// display name contains it (case-insensitively) and their ancestors are
-// shown, regardless of expansion, and projects without a match are left out.
-func (t *Tree) Visible(query string) []*Node {
+// Visible flattens the tree into the rows to draw. Without a filter,
+// collapsed nodes hide their children. With a query, only leaves whose
+// display name (or project name) contains it, case-insensitively, are
+// shown; with a status other than StatusNone, only leaves in that status.
+// Matching leaves bring their ancestors along regardless of expansion, and
+// projects without a match are left out.
+func (t *Tree) Visible(query string, status Status) []*Node {
 	var rows []*Node
 	q := strings.ToLower(query)
 	for _, p := range t.Projects {
-		if q == "" {
+		if q == "" && status == StatusNone {
 			rows = appendVisible(rows, p)
 		} else {
-			rows = appendMatching(rows, p, q)
+			rows = appendMatching(rows, p, q, status)
 		}
 	}
 	return rows
@@ -383,9 +385,11 @@ func appendVisible(rows []*Node, n *Node) []*Node {
 	return rows
 }
 
-func appendMatching(rows []*Node, n *Node, q string) []*Node {
+func appendMatching(rows []*Node, n *Node, q string, status Status) []*Node {
 	if n.IsLeaf() {
-		if strings.Contains(strings.ToLower(n.FQN), q) || strings.Contains(strings.ToLower(n.Project().Name), q) {
+		byName := q == "" || strings.Contains(strings.ToLower(n.FQN), q) || strings.Contains(strings.ToLower(n.Project().Name), q)
+		byStatus := status == StatusNone || n.status == status
+		if byName && byStatus {
 			return append(rows, n)
 		}
 		return rows
@@ -393,7 +397,7 @@ func appendMatching(rows []*Node, n *Node, q string) []*Node {
 	start := len(rows)
 	rows = append(rows, n)
 	for _, c := range n.Children {
-		rows = appendMatching(rows, c, q)
+		rows = appendMatching(rows, c, q, status)
 	}
 	if len(rows) == start+1 {
 		return rows[:start] // nothing matched beneath: drop the node itself

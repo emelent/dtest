@@ -95,13 +95,20 @@ func (m *Model) logTitle() string {
 }
 
 func (m *Model) treeTitle() string {
+	title := "Tests"
+	switch m.statusFilter {
+	case tree.StatusFailed:
+		title += "  failed only"
+	case tree.StatusSkipped:
+		title += "  skipped only"
+	}
 	switch {
 	case m.filtering:
 		return "? Filter › " + m.query + "▏"
 	case m.query != "":
-		return "Tests  filter: " + m.query
+		return title + "  filter: " + m.query
 	}
-	return "Tests"
+	return title
 }
 
 // refresh rebuilds both panes from the tree: the rows around the cursor,
@@ -114,7 +121,7 @@ func (m *Model) refresh() {
 
 func (m *Model) refreshTree() {
 	keep := m.current()
-	m.rows = m.tree.Visible(m.query)
+	m.rows = m.tree.Visible(m.query, m.statusFilter)
 	m.cursor = 0
 	// Keep the cursor on its node or, when a fold hid it, its nearest
 	// visible ancestor.
@@ -159,6 +166,10 @@ func (m *Model) emptyTreeMessage() string {
 		return "  " + m.spin.View() + " Listing tests…"
 	case m.query != "":
 		return styleDim.Render("  No tests match " + m.query)
+	case m.statusFilter == tree.StatusFailed:
+		return styleDim.Render("  No failed tests")
+	case m.statusFilter == tree.StatusSkipped:
+		return styleDim.Render("  No skipped tests")
 	}
 	return styleDim.Render("  No tests found")
 }
@@ -433,7 +444,7 @@ func (m *Model) treeIcon(n *tree.Node) string {
 
 // arrow is the fold glyph for a group: open when expanded or filtered.
 func (m *Model) arrow(n *tree.Node) string {
-	if n.Expanded || m.query != "" {
+	if n.Expanded || m.filtered() {
 		return iconOpen
 	}
 	return iconClosed
@@ -596,12 +607,14 @@ var helpRows = []helpRow{
 	{"ctrl+d / ctrl+u", "to move half a page"},
 	{"l / h", "to expand / collapse a project, class or theory"},
 	{"enter or r", "to run the selected project, class or test"},
-	{"a", "to run every project"},
-	{"f", "to rerun only the failed tests"},
+	{"A", "to run every project"},
+	{"F", "to rerun only the failed tests"},
+	{"f / s", "to show only the failed / skipped tests"},
+	{"a", "to show all tests again (esc does too)"},
 	{"x", "to cancel the running tests"},
 	{"n / N", "to jump to the next / previous failure"},
 	{"o", "to open the selected test in Neovim (a failed test opens at the failing line)"},
-	{"t or /", "to filter the tree by test or project name (enter keeps it, esc clears it)"},
+	{"t or /", "to filter the tree by name (enter keeps it, esc clears every filter)"},
 	{"v", "to show the raw dotnet output of the selected project instead"},
 	{"ctrl+r", "to rebuild and list the tests again"},
 	{"q", "to quit"},
