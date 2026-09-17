@@ -52,7 +52,7 @@ ctrl+j/k for their own pane movement.
 ## Features
 
 - Run the selected project, class, method or test; `a` runs everything, `f` re-runs only what failed; runs queue up, one `dotnet test` per project
-- Live status while tests run: the project row spins and everything running beneath it turns cyan; ✓ × ↓ arrive as each result comes in; projects, classes and theories carry a fold arrow (▾ / ▸) in the colour of their status, with counts and durations rolled up
+- Live status while tests run: the project row spins and everything running beneath it turns cyan, tests waiting in a queued run show ○; ✓ × ↓ arrive as each result comes in; projects, classes and theories carry a fold arrow (▾ / ▸) in the colour of their status, with counts and durations rolled up
 - Open the selected test in Neovim, either a running instance (via the socket in `$nvim_sock`) or one launched in place; a failed test opens at the failing line
 - Filter the tree by test or project name as you type
 

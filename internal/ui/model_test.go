@@ -420,9 +420,18 @@ func TestRunFlow(t *testing.T) {
 	if len(m.queue) != 1 || m.queue[0].filter != "" {
 		t.Fatalf("queue = %+v", m.queue)
 	}
+	// Tests waiting in the queued run show as queued; the one still
+	// running in the current run keeps running.
+	waits := m.tree.Lookup(class.Project(), "Alpha.Tests.SlowTests.Waits")
+	if waits.Status() != tree.StatusQueued || m.tree.Lookup(class.Project(), "Alpha.Tests.MathTests.Fails").Status() != tree.StatusRunning {
+		t.Fatalf("Waits=%v Fails=%v", waits.Status(), m.tree.Lookup(class.Project(), "Alpha.Tests.MathTests.Fails").Status())
+	}
+	press(m, "G", "l")
+	containsAll(t, view(m), "○ Waits", "1 queued")
+	press(m, "g", "g", "j", "j") // back inside MathTests, on Adds
 	press(m, "x")
-	if len(m.queue) != 0 {
-		t.Fatal("x should drop the queue")
+	if len(m.queue) != 0 || waits.Status() != tree.StatusNone {
+		t.Fatalf("x should drop the queue and clear queued marks, Waits=%v", waits.Status())
 	}
 	f.emit(dotnet.DoneEvent{Err: context.Canceled})
 	m.Update(<-m.runEvents())

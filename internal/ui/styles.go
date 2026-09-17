@@ -18,6 +18,7 @@ var (
 	styleFailed   = lipgloss.NewStyle().Foreground(colRed)
 	styleSkipped  = lipgloss.NewStyle().Foreground(colYellow)
 	styleRunning  = lipgloss.NewStyle().Foreground(colCyan)
+	styleQueued   = lipgloss.NewStyle().Foreground(colCyan).Faint(true)
 	styleDim      = lipgloss.NewStyle().Foreground(colGrey)
 	styleBold     = lipgloss.NewStyle().Bold(true)
 	styleKey      = lipgloss.NewStyle().Foreground(colCyan).Bold(true)
@@ -32,12 +33,13 @@ var (
 	badgeInfo = lipgloss.NewStyle().Background(colCyan).Foreground(colBlack).Bold(true).Padding(0, 1)
 )
 
-// Status glyphs, as vitest uses them.
+// Status glyphs, as vitest uses them, plus one for queued tests.
 const (
 	iconPassed  = "✓"
 	iconFailed  = "×"
 	iconSkipped = "↓"
 	iconNone    = "·"
+	iconQueued  = "○" // scheduled in a run that has not started
 	iconArrow   = "❯"
 	iconOpen    = "▾" // an expanded project, class or theory
 	iconClosed  = "▸" // a collapsed one

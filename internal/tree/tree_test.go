@@ -143,6 +143,15 @@ func TestStatusRollup(t *testing.T) {
 	if class.Status() != StatusRunning {
 		t.Error("SetStatus on an interior node must be ignored")
 	}
+	// Queued sits between running and failed in the roll-up.
+	tr.Lookup(p, "Alpha.Tests.MathTests.Theory(n: 1)").SetStatus(StatusQueued)
+	if class.Status() != StatusQueued || class.Counts().Queued != 1 {
+		t.Errorf("queued roll-up = %v", class.Status())
+	}
+	tr.Lookup(p, "Alpha.Tests.SlowTests.Waits").SetStatus(StatusRunning)
+	if p.Status() != StatusRunning {
+		t.Error("running beats queued")
+	}
 }
 
 func TestDuration(t *testing.T) {

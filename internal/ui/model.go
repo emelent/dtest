@@ -355,12 +355,31 @@ func (m *Model) enqueue(nodes []*tree.Node) tea.Cmd {
 		}
 		req.filter = dotnet.JoinFilters(filters)
 		req.label = p.Name + " › " + strings.Join(labels, ", ")
+		// Tests waiting for their run show as queued; ones already running
+		// (another request for the same project) keep spinning.
+		for _, l := range req.leaves {
+			if l.Status() != tree.StatusRunning {
+				l.SetStatus(tree.StatusQueued)
+			}
+		}
 		m.queue = append(m.queue, req)
 	}
 	if m.run == nil {
 		m.batchStart, m.batchEnd = now(), time.Time{}
 	}
 	return m.pump()
+}
+
+// dropQueue forgets the queued runs and clears their tests' queued marks.
+func (m *Model) dropQueue() {
+	for _, req := range m.queue {
+		for _, l := range req.leaves {
+			if l.Status() == tree.StatusQueued {
+				l.SetStatus(tree.StatusNone)
+			}
+		}
+	}
+	m.queue = nil
 }
 
 // pump starts the next queued run when none is active.
@@ -415,7 +434,7 @@ func (m *Model) handleRunEvent(msg runEventMsg) tea.Cmd {
 		m.tree.FoldByResult(msg.project)
 		var cmd tea.Cmd
 		if e.Err != nil {
-			m.queue = nil
+			m.dropQueue()
 			cmd = m.setStatus(label+": "+e.Err.Error(), true)
 		}
 		if len(m.queue) == 0 {
@@ -475,7 +494,7 @@ func (m *Model) cancelRun() tea.Cmd {
 	if m.run == nil {
 		return m.setStatus("Nothing is running", false)
 	}
-	m.queue = nil
+	m.dropQueue()
 	m.run.cancel()
 	return m.setStatus("Cancelling "+m.run.req.label+"…", false)
 }

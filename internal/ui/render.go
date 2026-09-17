@@ -239,8 +239,8 @@ func (m *Model) renderNodeLog(n *tree.Node) []string {
 			lines = append(lines, "")
 			lines = append(lines, m.renderFailure(l, false)...)
 		}
-	case c.Running > 0:
-		// The tally above already says how many are running.
+	case c.Running > 0, c.Queued > 0:
+		// The tally above already says how many are running or queued.
 	case c.Passed+c.Skipped > 0:
 		lines = append(lines, "", "  "+stylePassed.Render(iconPassed+" No failed tests."))
 	default:
@@ -254,8 +254,8 @@ func (m *Model) renderLeafLog(n *tree.Node) []string {
 	r := n.Result
 	head := "  " + m.statusIcon(n.Status()) + " " + styleBold.Render(breadcrumb(n))
 	switch {
-	case n.Status() == tree.StatusRunning:
-		return []string{head} // the spinner in the header says it all
+	case n.Status() == tree.StatusRunning, n.Status() == tree.StatusQueued:
+		return []string{head} // the glyph in the header says it all
 	case r == nil:
 		return []string{head, "", styleDim.Render("  Not run yet. Press enter to run it, o to open it in nvim.")}
 	case n.Status() == tree.StatusFailed:
@@ -386,6 +386,9 @@ func (m *Model) renderCounts(c tree.Counts) string {
 	if c.Running > 0 {
 		parts = append(parts, styleRunning.Render(fmt.Sprintf("%d running", c.Running)))
 	}
+	if c.Queued > 0 {
+		parts = append(parts, styleQueued.Render(fmt.Sprintf("%d queued", c.Queued)))
+	}
 	if c.Failed > 0 {
 		parts = append(parts, styleFailed.Bold(true).Render(fmt.Sprintf("%d failed", c.Failed)))
 	}
@@ -416,6 +419,8 @@ func (m *Model) treeIcon(n *tree.Node) string {
 		return m.statusIcon(status)
 	}
 	switch status {
+	case tree.StatusQueued:
+		return styleQueued.Render(m.arrow(n))
 	case tree.StatusPassed:
 		return stylePassed.Render(m.arrow(n))
 	case tree.StatusFailed:
@@ -438,6 +443,8 @@ func (m *Model) statusIcon(s tree.Status) string {
 	switch s {
 	case tree.StatusRunning:
 		return m.spin.View()
+	case tree.StatusQueued:
+		return styleQueued.Render(iconQueued)
 	case tree.StatusPassed:
 		return stylePassed.Render(iconPassed)
 	case tree.StatusFailed:

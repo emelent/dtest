@@ -28,6 +28,7 @@ type Status int
 const (
 	StatusNone Status = iota
 	StatusRunning
+	StatusQueued // scheduled in a run that has not started yet
 	StatusPassed
 	StatusFailed
 	StatusSkipped
@@ -89,8 +90,8 @@ func (n *Node) SetStatus(s Status) {
 }
 
 // Status is the leaf's own status or, for an interior node, the roll-up of
-// its leaves: running beats failed beats skipped beats passed; a node whose
-// leaves have never run is StatusNone.
+// its leaves: running beats queued beats failed beats passed beats skipped;
+// a node whose leaves have never run is StatusNone.
 func (n *Node) Status() Status {
 	if n.IsLeaf() {
 		return n.status
@@ -99,6 +100,8 @@ func (n *Node) Status() Status {
 	switch {
 	case c.Running > 0:
 		return StatusRunning
+	case c.Queued > 0:
+		return StatusQueued
 	case c.Failed > 0:
 		return StatusFailed
 	case c.Passed > 0:
@@ -110,7 +113,7 @@ func (n *Node) Status() Status {
 }
 
 // Counts tallies leaf statuses.
-type Counts struct{ Total, Running, Passed, Failed, Skipped int }
+type Counts struct{ Total, Running, Queued, Passed, Failed, Skipped int }
 
 // Counts tallies the leaves under the node.
 func (n *Node) Counts() Counts {
@@ -120,6 +123,8 @@ func (n *Node) Counts() Counts {
 		switch l.status {
 		case StatusRunning:
 			c.Running++
+		case StatusQueued:
+			c.Queued++
 		case StatusPassed:
 			c.Passed++
 		case StatusFailed:
