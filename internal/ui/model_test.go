@@ -21,7 +21,7 @@ const projA = "/src/Alpha.Tests/Alpha.Tests.csproj"
 // dotnet calls made.
 func newTestModel(t *testing.T) *Model {
 	t.Helper()
-	m := New(Config{Target: "/src/Sample.slnx", Socket: "/tmp/nvim.Sample.sock"})
+	m := New(Config{Version: "v1.2.3", Target: "/src/Sample.slnx", Socket: "/tmp/nvim.Sample.sock"})
 	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	p := m.tree.AddProject(projA)
 	m.tree.SetTests(p, []string{
@@ -90,7 +90,7 @@ func TestLayoutAndNavigation(t *testing.T) {
 		t.Fatalf("rows = %d", len(m.rows))
 	}
 	v := view(m)
-	containsAll(t, v, "DTEST", "⎯⎯ Log  Alpha.Tests ⎯", "⎯⎯ Tests ⎯", "▾ Alpha.Tests (5 tests)", "▸ MathTests (4 tests)", "5 not run (5)", "Not run yet",
+	containsAll(t, v, "DTEST  Sample  v1.2.3", "⎯⎯ Log  Alpha.Tests ⎯", "⎯⎯ Tests ⎯", "▾ Alpha.Tests (5 tests)", "▸ MathTests (4 tests)", "5 not run (5)", "Not run yet",
 		"Test Projects  (1)", "Tests  5", "Failed  0", "Skipped  0", "Passed  0", "Start at  –", "Duration  –",
 		"press ? to show help, press q to quit")
 	if strings.Contains(v, "Summary") || strings.Contains(v, "│") || strings.Contains(v, "Ready") || strings.Count(v, "DTEST") != 1 {

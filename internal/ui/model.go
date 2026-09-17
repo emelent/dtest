@@ -37,6 +37,7 @@ var (
 
 // Config is what main passes in.
 type Config struct {
+	Version string         // shown in the header; "dev" for local builds
 	Target  string         // solution or project file
 	Options dotnet.Options // configuration and --no-build
 	Socket  string         // explicit Neovim server socket; empty to use $nvim_sock

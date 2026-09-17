@@ -38,7 +38,7 @@ Flags:
 }
 
 func main() {
-	var cfg ui.Config
+	cfg := ui.Config{Version: version}
 	var help, showVersion bool
 	flag.StringVar(&cfg.Options.Configuration, "c", "", "")
 	flag.StringVar(&cfg.Options.Configuration, "configuration", "", "")

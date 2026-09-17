@@ -524,7 +524,11 @@ func displayPath(path string) string {
 // Header and stats.
 
 func (m *Model) renderHeader() string {
-	return fit(" "+badgeInfo.Render("DTEST")+" "+styleBold.Render(m.name), m.width)
+	line := " " + badgeInfo.Render("DTEST") + " " + styleBold.Render(m.name)
+	if m.cfg.Version != "" {
+		line += "  " + styleDim.Render(m.cfg.Version)
+	}
+	return fit(line, m.width)
 }
 
 // statsLines is the block beside the tree: the state line, then the
