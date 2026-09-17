@@ -1,0 +1,19 @@
+I want a TUI app made in golang that allows me to
+interact with my tests.
+
+The command should run with either a solution file or project file given
+
+Features:
+- display tests using tree from project down to individual test functions
+- allow running tests from tree, by selecting the tree you want to run
+- should be able to view logs from running tests
+- should be able to open file or specific test in nvim use project in (/Users/roy/code/claude/ghpr) for guidance on sending files
+- use vim bindings for motions
+- should be able to see which tests are currently running
+- show icons for failed and successful tests
+
+Constraints:
+- TUI using golang
+- use latest bubbletea (2.0.9)
+- use principles from https://go.dev/doc/effective_go when writing code
+
