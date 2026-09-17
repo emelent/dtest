@@ -50,10 +50,9 @@ func press(m *Model, keys ...string) tea.Cmd {
 			msg = tea.KeyPressMsg{Code: tea.KeySpace, Text: " "}
 		case "backspace":
 			msg = tea.KeyPressMsg{Code: tea.KeyBackspace}
-		case "ctrl+d":
-			msg = tea.KeyPressMsg{Code: 'd', Mod: tea.ModCtrl}
-		case "ctrl+u":
-			msg = tea.KeyPressMsg{Code: 'u', Mod: tea.ModCtrl}
+		}
+		if strings.HasPrefix(k, "ctrl+") {
+			msg = tea.KeyPressMsg{Code: rune(k[len(k)-1]), Mod: tea.ModCtrl}
 		}
 		_, last = m.handleKey(msg)
 	}
@@ -62,54 +61,71 @@ func press(m *Model, keys ...string) tea.Cmd {
 
 func view(m *Model) string { return ansi.Strip(m.View().Content) }
 
-// markedLine is the visible report line carrying the cursor marker.
-func markedLine(m *Model) string {
+// markedLines are the visible lines carrying a cursor marker.
+func markedLines(m *Model) []string {
+	var out []string
 	for _, l := range strings.Split(view(m), "\n") {
 		if strings.HasPrefix(l, iconArrow) {
-			return l
+			out = append(out, l)
 		}
 	}
-	return ""
+	return out
 }
 
-func (m *Model) node() *tree.Node {
-	r, _ := m.current()
-	return r.node
+func containsAll(t *testing.T, v string, wants ...string) {
+	t.Helper()
+	for _, w := range wants {
+		if !strings.Contains(v, w) {
+			t.Errorf("view should contain %q:\n%s", w, v)
+		}
+	}
 }
 
-func TestNavigationAndFolding(t *testing.T) {
+func TestLayoutAndNavigation(t *testing.T) {
 	m := newTestModel(t)
 	// Fresh: project, then its two classes collapsed.
-	if len(m.rows) != 3 || m.rows[1].node.Name != "MathTests" {
+	if len(m.rows) != 3 || m.rows[1].Name != "MathTests" {
 		t.Fatalf("rows = %d", len(m.rows))
 	}
-	press(m, "j", "l") // expand MathTests
-	if len(m.rows) != 6 || m.node().Name != "MathTests" {
-		t.Fatalf("after l: %d rows on %q", len(m.rows), m.node().Name)
+	v := view(m)
+	containsAll(t, v, "DTEST", "⎯⎯ Log ⎯", "⎯⎯ Tests ⎯", "⎯⎯ Summary ⎯", "│", "Failures appear here", "· Alpha.Tests (5 tests)", "· MathTests (4 tests)",
+		"Ready. 5 tests in 1 projects.", "press ? to show help, press q to quit")
+	if strings.Contains(v, "Start at") {
+		t.Error("summary should be blank before the first run")
 	}
-	press(m, "l") // into first child
-	if m.node().Name != "Adds" {
-		t.Fatalf("l on expanded -> %q", m.node().Name)
+	// The log pane is about 70% of the height: header + title + log + title + bottom = 40.
+	g := m.layout()
+	if g.logH < 24 || g.logH > 27 || g.bottomH+g.logH+headerH+2*titleH != 40 || g.treeW != 60 || g.statsW != 59 {
+		t.Fatalf("geometry = %+v", g)
+	}
+
+	press(m, "j", "l") // expand MathTests
+	if len(m.rows) != 6 || m.current().Name != "MathTests" {
+		t.Fatalf("after l: %d rows on %q", len(m.rows), m.current().Name)
+	}
+	press(m, "l")
+	if m.current().Name != "Adds" {
+		t.Fatalf("l on expanded -> %q", m.current().Name)
 	}
 	press(m, "G")
-	if m.node().Name != "SlowTests" {
-		t.Fatalf("G -> %q", m.node().Name)
+	if m.current().Name != "SlowTests" {
+		t.Fatalf("G -> %q", m.current().Name)
 	}
 	press(m, "g", "g")
 	if m.cursor != 0 {
 		t.Fatalf("gg -> %d", m.cursor)
 	}
-	press(m, "j", "j", "j", "j", "space") // Theory: toggle open
-	if m.node().Name != "Theory" || !strings.Contains(view(m), "(n: 1)") {
-		t.Fatalf("space should expand the theory, on %q", m.node().Name)
+	press(m, "j", "j", "j", "j", "space")
+	if m.current().Name != "Theory" || !strings.Contains(view(m), "(n: 1)") {
+		t.Fatalf("space should expand the theory, on %q", m.current().Name)
 	}
-	press(m, "h") // collapse it
+	press(m, "h")
 	if strings.Contains(view(m), "(n: 1)") {
 		t.Fatal("h should collapse the theory")
 	}
-	press(m, "h") // to the parent class
-	if m.node().Name != "MathTests" {
-		t.Fatalf("h on a collapsed node should select its parent, got %q", m.node().Name)
+	press(m, "h")
+	if m.current().Name != "MathTests" {
+		t.Fatalf("h on a collapsed node selects its parent, got %q", m.current().Name)
 	}
 	press(m, "ctrl+d")
 	if m.cursor == 1 {
@@ -119,14 +135,43 @@ func TestNavigationAndFolding(t *testing.T) {
 	if m.cursor != 0 {
 		t.Fatalf("ctrl+u -> %d", m.cursor)
 	}
-	v := view(m)
-	for _, want := range []string{"DTEST", "Alpha.Tests", "(5 tests)", "MathTests (4 tests)", "Ready. 5 tests in 1 projects.", "press ? to show help, press q to quit"} {
-		if !strings.Contains(v, want) {
-			t.Errorf("view should contain %q:\n%s", want, v)
-		}
+	if marked := markedLines(m); len(marked) != 1 || !strings.Contains(marked[0], "Alpha.Tests (5 tests)") {
+		t.Fatalf("tree marker = %v", marked)
 	}
-	if strings.Contains(v, "Start at") {
-		t.Error("summary should be blank before the first run")
+}
+
+func TestPaneFocus(t *testing.T) {
+	m := newTestModel(t)
+	if m.focus != paneTree {
+		t.Fatal("the tree is focused first")
+	}
+	press(m, "ctrl+k")
+	if m.focus != paneLog {
+		t.Fatal("ctrl+k focuses the log")
+	}
+	press(m, "j", "j") // nothing to select yet, and the tree cursor stays put
+	if m.cursor != 0 {
+		t.Fatal("log keys must not move the tree cursor")
+	}
+	press(m, "ctrl+l")
+	if m.focus != paneLog {
+		t.Fatal("ctrl+l from the log does nothing")
+	}
+	press(m, "ctrl+j", "ctrl+l")
+	if m.focus != paneStats {
+		t.Fatal("ctrl+j then ctrl+l reaches the stats")
+	}
+	press(m, "ctrl+h")
+	if m.focus != paneTree {
+		t.Fatal("ctrl+h returns to the tree")
+	}
+	press(m, "ctrl+l", "backspace")
+	if m.focus != paneTree {
+		t.Fatal("backspace stands in for ctrl+h")
+	}
+	press(m, "ctrl+l", "ctrl+k", "ctrl+j")
+	if m.focus != paneTree {
+		t.Fatal("ctrl+k from the stats goes to the log, ctrl+j down to the tree")
 	}
 }
 
@@ -136,12 +181,12 @@ func TestFilter(t *testing.T) {
 	if !m.filtering || m.query != "wai" {
 		t.Fatalf("filtering=%v query=%q", m.filtering, m.query)
 	}
-	if len(m.rows) != 3 || m.rows[2].node.Name != "Waits" {
+	if len(m.rows) != 3 || m.rows[2].Name != "Waits" {
 		t.Fatalf("filtered rows = %d", len(m.rows))
 	}
 	v := view(m)
-	if !strings.Contains(v, "Filter by test or project name › wai") || strings.Contains(v, "\t") {
-		t.Fatalf("status should show the filter and rows must not contain tabs:\n%s", v)
+	if !strings.Contains(v, "? Filter › wai") || strings.Contains(v, "\t") {
+		t.Fatalf("tree title should show the prompt and rows must not contain tabs:\n%s", v)
 	}
 	m.handleKey(tea.KeyPressMsg{Code: 'T', Text: "T", Mod: tea.ModShift})
 	m.handleKey(tea.KeyPressMsg{Code: 'x', Text: "x", Mod: tea.ModCtrl})
@@ -153,14 +198,14 @@ func TestFilter(t *testing.T) {
 		t.Fatalf("no-match state: %d rows\n%s", len(m.rows), view(m))
 	}
 	press(m, "backspace", "backspace", "backspace", "enter")
-	if m.filtering || m.query != "wai" || !strings.Contains(view(m), "filter: wai") {
+	if m.filtering || m.query != "wai" || !strings.Contains(view(m), "Tests  filter: wai") {
 		t.Fatalf("after enter: filtering=%v query=%q", m.filtering, m.query)
 	}
 	press(m, "esc")
 	if m.query != "" || len(m.rows) != 3 {
 		t.Fatalf("esc should clear the filter: %q %d", m.query, len(m.rows))
 	}
-	press(m, "/", "a", "l", "p", "h", "a", ".", "t", "esc")
+	press(m, "/", "a", "esc")
 	if m.query != "" {
 		t.Fatal("esc while typing clears the filter")
 	}
@@ -199,14 +244,11 @@ func TestRunFlow(t *testing.T) {
 	if f.project != projA || f.filter != "FullyQualifiedName~Alpha.Tests.MathTests." {
 		t.Fatalf("run %q %q", f.project, f.filter)
 	}
-	class := m.node()
+	class := m.current()
 	if class.Status() != tree.StatusRunning || class.Counts().Running != 4 {
 		t.Fatalf("class should be running: %+v", class.Counts())
 	}
-	v := view(m)
-	if !strings.Contains(v, "RUN") || !strings.Contains(v, "Alpha.Tests › MathTests") || !strings.Contains(v, "4 running") || !strings.Contains(v, "19:10:48") {
-		t.Fatalf("running view:\n%s", v)
-	}
+	containsAll(t, view(m), "RUN", "Alpha.Tests › MathTests", "4 running", "19:10:48", "Running Alpha.Tests › MathTests…")
 	f.emit(dotnet.LineEvent{Text: "  Starting: Alpha.Tests"})
 	f.emit(dotnet.ResultEvent{Result: dotnet.Result{Name: "Alpha.Tests.MathTests.Adds", Outcome: dotnet.OutcomePassed, Duration: 32 * time.Millisecond}})
 	for i := 0; i < 2; i++ {
@@ -234,51 +276,32 @@ func TestRunFlow(t *testing.T) {
 	if m.tree.Lookup(class.Project(), "Alpha.Tests.MathTests.Extra") == nil {
 		t.Fatal("an unlisted test in the results should be added")
 	}
-	// The report folds by result: the failing class is open, the theory
-	// (one skipped, none failed) closed; the failure section and summary
-	// carry the details.
-	v = view(m)
-	for _, want := range []string{
-		"× MathTests (5 tests | 1 failed | 1 skipped)",
-		"× Fails 0.001s",
-		"→ Assert.Equal() Failure: Values differ",
-		"Failed Tests 1",
+	v := view(m)
+	containsAll(t, v,
+		"⎯⎯ Failed Tests 1 ⎯",
 		"FAIL  Alpha.Tests › MathTests › Fails",
 		"Expected: 5",
 		"Actual:   4",
 		"❯ /src/Alpha.Tests/UnitTest1.cs:12",
+		"× MathTests (5 tests | 1 failed | 1 skipped)",
+		"× Fails 0.001s",
 		"Test Projects  1 failed (1)",
-		"Tests  1 failed | 3 passed | 1 skipped | 1 not run (6)",
+		"Tests  1 failed | 3 passed | 1 skipped",
+		"│                1 not run (6)",
 		"Duration  2m34s (tests 0.033s)",
 		"FAIL  Tests failed.",
-		"press ? to show help, press q to quit",
-	} {
-		if !strings.Contains(v, want) {
-			t.Errorf("view should contain %q:\n%s", want, v)
-		}
-	}
+	)
 	if strings.Contains(v, "(n: 1)") {
 		t.Error("theory without failures should be folded")
 	}
-	// n jumps to the failed test and the marker moves with it; G reaches
-	// the failure entry, which also selects that test.
+	// n selects the failed test in the tree; the log's marker follows it.
 	press(m, "g", "g", "n")
-	if m.node().Name != "Fails" {
-		t.Fatalf("n -> %q", m.node().Name)
+	if m.current().Name != "Fails" {
+		t.Fatalf("n -> %q", m.current().Name)
 	}
-	if marked := markedLine(m); !strings.Contains(marked, "× Fails") {
-		t.Fatalf("marker should be on Fails, got %q", marked)
-	}
-	press(m, "G")
-	if r, _ := m.current(); !r.failure || r.node.Name != "Fails" {
-		t.Fatalf("G should land on the failure entry: %+v", r)
-	}
-	if marked := markedLine(m); !strings.HasPrefix(marked, "❯  FAIL  Alpha.Tests › MathTests › Fails") {
-		t.Fatalf("marker should be on the failure entry, got %q", marked)
-	}
-	press(m, "g", "g")
-	if marked := markedLine(m); !strings.HasPrefix(marked, "❯ × Alpha.Tests (6 tests") {
-		t.Fatalf("marker on the project row = %q", marked)
+	marked := markedLines(m)
+	if len(marked) != 2 || !strings.Contains(marked[0], "FAIL  Alpha.Tests › MathTests › Fails") || !strings.Contains(marked[1], "× Fails") {
+		t.Fatalf("markers = %v", marked)
 	}
 	// f re-runs the failed tests only; a runs whole projects and queues.
 	press(m, "f")
@@ -299,9 +322,23 @@ func TestRunFlow(t *testing.T) {
 	if m.run != nil || m.tree.Lookup(class.Project(), "Alpha.Tests.MathTests.Fails").Status() != tree.StatusNone {
 		t.Fatal("cancelled leaves should return to StatusNone")
 	}
+	// Moving through the log's entries selects the same test in the tree;
+	// enter there re-runs it.
+	fails := m.tree.Lookup(class.Project(), "Alpha.Tests.MathTests.Fails")
+	fails.SetStatus(tree.StatusFailed)
+	m.refresh()
+	press(m, "g", "g", "ctrl+k", "j", "k")
+	if m.current() != fails {
+		t.Fatalf("tree should follow the log's selection, got %q", m.current().Name)
+	}
+	press(m, "enter")
+	<-f.started
+	if f.filter != "FullyQualifiedName=Alpha.Tests.MathTests.Fails" {
+		t.Fatalf("log-pane enter filter = %q", f.filter)
+	}
 }
 
-func TestRunFailedWithNothingFailed(t *testing.T) {
+func TestNothingToDo(t *testing.T) {
 	m := newTestModel(t)
 	press(m, "f")
 	if !strings.Contains(m.status, "No failed tests to re-run") {
@@ -319,24 +356,21 @@ func TestRunFailedWithNothingFailed(t *testing.T) {
 
 func TestOutputToggleAndHelp(t *testing.T) {
 	m := newTestModel(t)
-	m.logs[buildLogKey] = []string{"$ dotnet build", "  Determining projects to restore...", "Build succeeded."}
+	m.logs[buildLogKey] = []string{"$ dotnet build", "  Determining projects to restore...", "Program.cs(3,5): error CS1002: ; expected", "Build FAILED."}
 	m.lastLog = buildLogKey
 	m.refresh()
-	if v := view(m); strings.Contains(v, "Determining projects") {
-		t.Fatalf("output hidden by default:\n%s", v)
+	v := view(m)
+	if strings.Contains(v, "Determining projects") || !strings.Contains(v, "BUILD  Sample.slnx") || !strings.Contains(v, "error CS1002") {
+		t.Fatalf("build errors show, the rest is hidden:\n%s", v)
 	}
 	press(m, "v")
-	if v := view(m); !strings.Contains(v, "Output  build") || !strings.Contains(v, "Determining projects") || !strings.Contains(v, "Build succeeded.") {
-		t.Fatalf("output shown:\n%s", v)
-	}
+	containsAll(t, view(m), "⎯⎯ Output  build ⎯", "Determining projects", "Build FAILED.")
 	press(m, "v")
 	if strings.Contains(view(m), "Determining projects") {
 		t.Fatal("v should hide the output again")
 	}
 	press(m, "?")
-	if v := view(m); !strings.Contains(v, "Usage") || !strings.Contains(v, "press f") || !strings.Contains(v, "rerun only the failed tests") || !strings.Contains(v, "/tmp/nvim.Sample.sock") || strings.Contains(v, "Ready.") {
-		t.Fatalf("help:\n%s", v)
-	}
+	containsAll(t, view(m), "⎯⎯ Usage ⎯", "press f", "rerun only the failed tests", "/tmp/nvim.Sample.sock")
 	press(m, "j")
 	if m.help || m.cursor != 0 {
 		t.Fatal("any key closes help without acting")
@@ -374,12 +408,12 @@ func TestOpenInEditor(t *testing.T) {
 	if opened[len(opened)-1] != projA {
 		t.Fatalf("project open = %v", opened)
 	}
-	// A failure entry opens the failing line from the stack trace.
+	// From the log pane, o opens the failing line from the stack trace.
 	fails := m.tree.Lookup(m.tree.Projects[0], "Alpha.Tests.MathTests.Fails")
 	fails.Result = &dotnet.Result{Outcome: dotnet.OutcomeFailed, Message: "boom", StackTrace: "   at X in /src/Alpha.Tests/UnitTest1.cs:line 12"}
 	fails.SetStatus(tree.StatusFailed)
 	m.refresh()
-	press(m, "G", "o")
+	press(m, "ctrl+k", "o")
 	if lines[len(lines)-1] != 12 {
 		t.Fatalf("failure entry should open line 12, got %v", lines)
 	}

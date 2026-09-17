@@ -1,6 +1,6 @@
-// Package ui is the bubbletea front end: one scrolling report in the style
-// of vitest, with a cursor over its lines, a fixed summary and a status
-// line.
+// Package ui is the bubbletea front end, laid out in three panes in the
+// style of vitest: the failure log on top, the test tree bottom-left and the
+// run statistics bottom-right.
 package ui
 
 import (
@@ -60,13 +60,14 @@ type activeRun struct {
 	events chan tea.Msg
 }
 
-// row is one selectable line of the report: a tree node, or a failure
-// entry (which selects its test but opens the failure position).
-type row struct {
-	node    *tree.Node
-	failure bool
-	line    int // first line of the row in the report
-}
+// pane is one of the three regions of the screen.
+type pane int
+
+const (
+	paneLog   pane = iota // top: failures and, on request, raw output
+	paneTree              // bottom-left: the test tree
+	paneStats             // bottom-right: the summary and status
+)
 
 // Model is the root bubbletea model.
 type Model struct {
@@ -74,13 +75,21 @@ type Model struct {
 	name   string // solution or project name without extension
 	socket string
 
-	tree   *tree.Tree
-	rows   []row
+	tree *tree.Tree
+	// The tree pane's rows and cursor.
+	rows   []*tree.Node
 	cursor int
+	// The log pane's failure entries and the selected one.
+	fails      []*tree.Node
+	failCursor int
+	failLines  []int // first line of each entry in the log
 
 	width, height int
-	report        viewport.Model
-	reportSig     string
+	focus         pane
+	log           viewport.Model
+	logSig        string
+	treeView      viewport.Model
+	treeSig       string
 	spin          spinner.Model
 
 	logs     map[string][]string // raw dotnet output by project path, plus buildLogKey
@@ -120,10 +129,12 @@ func New(cfg Config) *Model {
 		logs:      map[string][]string{},
 		locations: map[string]dotnet.Location{},
 		spin:      spinner.New(spinner.WithSpinner(spinner.MiniDot), spinner.WithStyle(styleRunning)),
-		report:    viewport.New(),
+		log:       viewport.New(),
+		treeView:  viewport.New(),
+		focus:     paneTree,
 	}
-	m.report.SoftWrap = true
-	m.report.MouseWheelEnabled = true
+	m.log.MouseWheelEnabled = true
+	m.treeView.MouseWheelEnabled = true
 	return m
 }
 
@@ -282,7 +293,11 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.MouseWheelMsg:
 		var cmd tea.Cmd
-		m.report, cmd = m.report.Update(msg)
+		if m.focus == paneLog {
+			m.log, cmd = m.log.Update(msg)
+		} else {
+			m.treeView, cmd = m.treeView.Update(msg)
+		}
 		return m, cmd
 
 	case tea.KeyPressMsg:
@@ -464,23 +479,25 @@ func (m *Model) Shutdown() {
 
 // Editor.
 
-// openInEditor sends the source for the selected row to Neovim: the
-// failure position for a failure entry, the declaration otherwise. Without
-// a listening server nvim is opened in the terminal instead.
+// openInEditor sends the source for the selection to Neovim: the failure
+// position when the log pane is focused on an entry, the declaration of
+// the tree's node otherwise. Without a listening server nvim is opened in
+// the terminal instead.
 func (m *Model) openInEditor() tea.Cmd {
-	r, ok := m.current()
-	if !ok {
+	n := m.selected()
+	if n == nil {
 		return nil
 	}
 	var loc dotnet.Location
-	if r.failure && r.node.Result != nil {
-		loc, ok = r.node.Result.FailureLocation()
-	}
-	if !ok || loc.File == "" {
-		loc, ok = m.locateNode(r.node)
+	ok := false
+	if m.focus == paneLog && n.Result != nil {
+		loc, ok = n.Result.FailureLocation()
 	}
 	if !ok {
-		return m.setStatus("No source location for "+r.node.Name, true)
+		loc, ok = m.locateNode(n)
+	}
+	if !ok {
+		return m.setStatus("No source location for "+n.Name, true)
 	}
 	if hasServer(m.socket) {
 		if err := openInServer(m.socket, loc.File, loc.Line); err != nil {
@@ -516,53 +533,93 @@ func (m *Model) locateNode(n *tree.Node) (dotnet.Location, bool) {
 	return loc, ok
 }
 
-// Cursor.
+// Cursors.
 
-// current is the selected row.
-func (m *Model) current() (row, bool) {
+// current is the tree node under the tree cursor.
+func (m *Model) current() *tree.Node {
 	if m.cursor < len(m.rows) {
-		return m.rows[m.cursor], true
+		return m.rows[m.cursor]
 	}
-	return row{}, false
+	return nil
+}
+
+// currentFailure is the failure entry selected in the log pane.
+func (m *Model) currentFailure() *tree.Node {
+	if m.failCursor < len(m.fails) {
+		return m.fails[m.failCursor]
+	}
+	return nil
+}
+
+// selected is the node the focused pane points at: a failure entry's test
+// when the log pane is focused, otherwise the tree cursor's node.
+func (m *Model) selected() *tree.Node {
+	if m.focus == paneLog {
+		return m.currentFailure()
+	}
+	return m.current()
 }
 
 func (m *Model) move(delta int) {
-	m.cursor += delta
-	m.clampCursor()
+	m.cursor = clamp(m.cursor+delta, len(m.rows))
+	m.syncFailureToTree()
 }
 
-func (m *Model) clampCursor() {
-	if m.cursor >= len(m.rows) {
-		m.cursor = len(m.rows) - 1
-	}
-	if m.cursor < 0 {
-		m.cursor = 0
+// moveFailure steps through the failure entries and points the tree at the
+// same test, so both panes agree.
+func (m *Model) moveFailure(delta int) {
+	m.failCursor = clamp(m.failCursor+delta, len(m.fails))
+	if f := m.currentFailure(); f != nil {
+		m.selectNode(f)
 	}
 }
 
-// selectNode moves the cursor to n's tree row, expanding its ancestors.
+func clamp(i, n int) int {
+	if i >= n {
+		i = n - 1
+	}
+	if i < 0 {
+		i = 0
+	}
+	return i
+}
+
+// syncFailureToTree points the log pane at the entry of the failed test
+// under the tree cursor, so the two panes agree.
+func (m *Model) syncFailureToTree() {
+	n := m.current()
+	for i, f := range m.fails {
+		if f == n {
+			m.failCursor = i
+			return
+		}
+	}
+}
+
+// selectNode moves the tree cursor to n, expanding its ancestors.
 func (m *Model) selectNode(n *tree.Node) {
 	for p := n.Parent; p != nil; p = p.Parent {
 		p.Expanded = true
 	}
-	m.refresh() // lay the rows out with the ancestors open
+	m.rows = m.tree.Visible(m.query)
 	for i, r := range m.rows {
-		if r.node == n && !r.failure {
+		if r == n {
 			m.cursor = i
 			break
 		}
 	}
-	m.refresh() // draw the marker on the new row and scroll to it
+	m.syncFailureToTree()
+	m.refresh()
 }
 
-// nextFailed moves to the next (or previous) failed test in tree order,
-// wrapping around.
+// nextFailed moves the tree cursor to the next (or previous) failed test in
+// tree order, wrapping around.
 func (m *Model) nextFailed(forward bool) tea.Cmd {
 	leaves := m.tree.Leaves()
 	start := -1
-	if r, ok := m.current(); ok {
+	if cur := m.current(); cur != nil {
 		for i, l := range leaves {
-			if l == r.node || (!r.node.IsLeaf() && isUnder(l, r.node)) {
+			if l == cur || (!cur.IsLeaf() && isUnder(l, cur)) {
 				start = i
 				if forward {
 					break
