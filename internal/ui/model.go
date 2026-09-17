@@ -1,5 +1,6 @@
-// Package ui is the bubbletea front end: a test tree on the left, a log or
-// test detail pane on the right, and a status bar.
+// Package ui is the bubbletea front end: one scrolling report in the style
+// of vitest, with a cursor over its lines, a fixed summary and a status
+// line.
 package ui
 
 import (
@@ -29,6 +30,7 @@ var (
 	hasServer    = editor.HasServer
 	openInServer = editor.Open
 	lookPath     = exec.LookPath
+	now          = time.Now
 )
 
 // Config is what main passes in.
@@ -37,13 +39,6 @@ type Config struct {
 	Options dotnet.Options // configuration and --no-build
 	Socket  string         // explicit Neovim server socket; empty to use $nvim_sock
 }
-
-type pane int
-
-const (
-	paneTree pane = iota
-	paneLog
-)
 
 const (
 	statusTimeout = 5 * time.Second
@@ -65,6 +60,14 @@ type activeRun struct {
 	events chan tea.Msg
 }
 
+// row is one selectable line of the report: a tree node, or a failure
+// entry (which selects its test but opens the failure position).
+type row struct {
+	node    *tree.Node
+	failure bool
+	line    int // first line of the row in the report
+}
+
 // Model is the root bubbletea model.
 type Model struct {
 	cfg    Config
@@ -72,34 +75,36 @@ type Model struct {
 	socket string
 
 	tree   *tree.Tree
-	rows   []*tree.Node
+	rows   []row
 	cursor int
-	top    int
 
 	width, height int
-	focus         pane
-	log           viewport.Model
-	logKey        string
-	logSig        string // identifies the content last given to the viewport
+	report        viewport.Model
+	reportSig     string
 	spin          spinner.Model
 
-	logs     map[string][]string // by project path, plus buildLogKey
+	logs     map[string][]string // raw dotnet output by project path, plus buildLogKey
+	lastLog  string              // key of the most recent output
 	queue    []runRequest
 	run      *activeRun
 	loading  int // projects whose test list is outstanding
 	building bool
-	events   chan tea.Msg // build and list events
+	events   chan tea.Msg // build events
+
+	batchStart time.Time // when the current sequence of runs began
+	batchEnd   time.Time // when it finished; zero while running
+	runsDone   bool      // at least one run has finished
 
 	status    string
 	statusErr bool
 	statusID  int
 
-	help      bool
-	fullLog   bool // show every line of dotnet output instead of results only
-	searching bool
-	query     string
-	pendingG  bool
-	fatal     error
+	help       bool
+	showOutput bool // append the raw dotnet output to the report
+	filtering  bool
+	query      string
+	pendingG   bool
+	fatal      error
 
 	locations map[string]dotnet.Location
 }
@@ -115,10 +120,10 @@ func New(cfg Config) *Model {
 		logs:      map[string][]string{},
 		locations: map[string]dotnet.Location{},
 		spin:      spinner.New(spinner.WithSpinner(spinner.MiniDot), spinner.WithStyle(styleRunning)),
-		log:       viewport.New(),
+		report:    viewport.New(),
 	}
-	m.log.SoftWrap = true
-	m.log.MouseWheelEnabled = true
+	m.report.SoftWrap = true
+	m.report.MouseWheelEnabled = true
 	return m
 }
 
@@ -169,6 +174,7 @@ func waitMsg(ch <-chan tea.Msg) tea.Cmd {
 func (m *Model) startBuild() tea.Cmd {
 	m.building = true
 	m.logs[buildLogKey] = nil
+	m.lastLog = buildLogKey
 	ch := make(chan tea.Msg, 256)
 	m.events = ch
 	target, opts := m.cfg.Target, m.cfg.Options
@@ -176,7 +182,7 @@ func (m *Model) startBuild() tea.Cmd {
 		err := buildAll(context.Background(), target, opts, func(e dotnet.LineEvent) { ch <- buildLineMsg{text: e.Text} })
 		ch <- buildDoneMsg{err: err}
 	}()
-	return tea.Batch(waitMsg(ch), m.setStatus("Building "+filepath.Base(target)+"…", false))
+	return waitMsg(ch)
 }
 
 // startListing lists the tests of every project in parallel.
@@ -192,7 +198,6 @@ func (m *Model) startListing() tea.Cmd {
 			return listMsg{project: p, names: names, err: err}
 		})
 	}
-	cmds = append(cmds, m.setStatus("Listing tests…", false))
 	return tea.Batch(cmds...)
 }
 
@@ -213,7 +218,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.layout()
-		m.refreshLog()
+		m.refresh()
 		return m, nil
 
 	case spinner.TickMsg:
@@ -229,7 +234,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		for _, p := range msg.paths {
 			m.tree.AddProject(p)
 		}
-		m.rebuildRows()
+		m.refresh()
 		if m.cfg.Options.NoBuild {
 			return m, m.startListing()
 		}
@@ -237,14 +242,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case buildLineMsg:
 		m.logs[buildLogKey] = append(m.logs[buildLogKey], msg.text)
-		m.refreshLog()
+		m.refresh()
 		return m, waitMsg(m.events)
 
 	case buildDoneMsg:
 		m.building = false
 		var cmd tea.Cmd
 		if msg.err != nil {
-			cmd = m.setStatus(msg.err.Error()+" (see log)", true)
+			cmd = m.setStatus(msg.err.Error()+" (press v for the output)", true)
 		}
 		return m, tea.Batch(cmd, m.startListing())
 
@@ -257,11 +262,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.tree.SetTests(msg.project, msg.names)
 		}
-		m.rebuildRows()
-		m.refreshLog()
-		if m.loading == 0 && cmd == nil {
-			cmd = m.setStatus(fmt.Sprintf("%d tests in %d projects", m.tree.Counts().Total, len(m.tree.Projects)), false)
-		}
+		m.refresh()
 		return m, cmd
 
 	case runEventMsg:
@@ -280,17 +281,9 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.MouseWheelMsg:
-		if m.focus == paneLog || m.width < twoPaneMin {
-			var cmd tea.Cmd
-			m.log, cmd = m.log.Update(msg)
-			return m, cmd
-		}
-		if msg.Button == tea.MouseWheelDown {
-			m.move(3)
-		} else if msg.Button == tea.MouseWheelUp {
-			m.move(-3)
-		}
-		return m, nil
+		var cmd tea.Cmd
+		m.report, cmd = m.report.Update(msg)
+		return m, cmd
 
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
@@ -298,7 +291,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// setStatus shows text in the status bar for a while.
+// setStatus shows text in the status line for a while.
 func (m *Model) setStatus(text string, isErr bool) tea.Cmd {
 	m.status, m.statusErr = text, isErr
 	m.statusID++
@@ -308,9 +301,8 @@ func (m *Model) setStatus(text string, isErr bool) tea.Cmd {
 
 // Running.
 
-// enqueue queues a run for node (or the marked nodes) and starts it when
-// nothing else is running. Nodes are grouped by project because one dotnet
-// process serves one project.
+// enqueue queues a run for each project that nodes belong to and starts the
+// first when nothing else is running.
 func (m *Model) enqueue(nodes []*tree.Node) tea.Cmd {
 	byProject := map[*tree.Node][]*tree.Node{}
 	var order []*tree.Node
@@ -335,8 +327,11 @@ func (m *Model) enqueue(nodes []*tree.Node) tea.Cmd {
 			labels = append(labels, n.Name)
 		}
 		req.filter = dotnet.JoinFilters(filters)
-		req.label = p.Name + ": " + strings.Join(labels, ", ")
+		req.label = p.Name + " › " + strings.Join(labels, ", ")
 		m.queue = append(m.queue, req)
+	}
+	if m.run == nil {
+		m.batchStart, m.batchEnd = now(), time.Time{}
 	}
 	return m.pump()
 }
@@ -355,12 +350,13 @@ func (m *Model) pump() tea.Cmd {
 	ch := make(chan tea.Msg, 256)
 	m.run = &activeRun{req: req, cancel: cancel, events: ch}
 	m.logs[req.project.Path] = nil
+	m.lastLog = req.project.Path
 	project, opts := req.project, m.cfg.Options
 	go func() {
 		runTests(ctx, project.Path, req.filter, opts, func(e dotnet.Event) { ch <- runEventMsg{project: project, event: e} })
 	}()
-	m.refreshLog()
-	return tea.Batch(waitMsg(ch), m.setStatus("Running "+req.label, false))
+	m.refresh()
+	return waitMsg(ch)
 }
 
 func (m *Model) handleRunEvent(msg runEventMsg) tea.Cmd {
@@ -371,13 +367,12 @@ func (m *Model) handleRunEvent(msg runEventMsg) tea.Cmd {
 	switch e := msg.event.(type) {
 	case dotnet.LineEvent:
 		m.logs[key] = append(m.logs[key], e.Text)
-		m.refreshLog()
+		m.refresh()
 		return waitMsg(m.run.events)
 
 	case dotnet.ResultEvent:
 		m.apply(msg.project, e.Result)
-		m.rebuildRows()
-		m.refreshLog()
+		m.refresh()
 		return waitMsg(m.run.events)
 
 	case dotnet.DoneEvent:
@@ -392,16 +387,17 @@ func (m *Model) handleRunEvent(msg runEventMsg) tea.Cmd {
 		label := m.run.req.label
 		m.run.cancel()
 		m.run = nil
-		m.rebuildRows()
-		m.refreshLog()
+		m.tree.FoldByResult(msg.project)
 		var cmd tea.Cmd
 		if e.Err != nil {
 			m.queue = nil
 			cmd = m.setStatus(label+": "+e.Err.Error(), true)
-		} else {
-			c := msg.project.Counts()
-			cmd = m.setStatus(fmt.Sprintf("%s: %d passed, %d failed, %d skipped", label, c.Passed, c.Failed, c.Skipped), c.Failed > 0)
 		}
+		if len(m.queue) == 0 {
+			m.batchEnd = now()
+			m.runsDone = true
+		}
+		m.refresh()
 		return tea.Batch(cmd, m.pump())
 	}
 	return nil
@@ -425,6 +421,30 @@ func (m *Model) apply(project *tree.Node, r dotnet.Result) {
 	}
 }
 
+// runFailed re-runs every test that failed last time. Theory rows share
+// their method's filter, so each method is included once.
+func (m *Model) runFailed() tea.Cmd {
+	var nodes []*tree.Node
+	seen := map[*tree.Node]bool{}
+	for _, l := range m.tree.Leaves() {
+		if l.Status() != tree.StatusFailed {
+			continue
+		}
+		unit := l
+		if l.Kind == tree.KindCase {
+			unit = l.Parent
+		}
+		if !seen[unit] {
+			seen[unit] = true
+			nodes = append(nodes, unit)
+		}
+	}
+	if len(nodes) == 0 {
+		return m.setStatus("No failed tests to re-run", false)
+	}
+	return m.enqueue(nodes)
+}
+
 // cancelRun stops the active run and drops the queue.
 func (m *Model) cancelRun() tea.Cmd {
 	if m.run == nil {
@@ -444,17 +464,23 @@ func (m *Model) Shutdown() {
 
 // Editor.
 
-// openInEditor sends the source of the node under the cursor to the Neovim
-// listening on the socket from $nvim_sock. Without a socket, or with nothing
-// listening on it, nvim is opened in the terminal instead.
+// openInEditor sends the source for the selected row to Neovim: the
+// failure position for a failure entry, the declaration otherwise. Without
+// a listening server nvim is opened in the terminal instead.
 func (m *Model) openInEditor() tea.Cmd {
-	n := m.current()
-	if n == nil {
+	r, ok := m.current()
+	if !ok {
 		return nil
 	}
-	loc, ok := m.locateNode(n)
+	var loc dotnet.Location
+	if r.failure && r.node.Result != nil {
+		loc, ok = r.node.Result.FailureLocation()
+	}
+	if !ok || loc.File == "" {
+		loc, ok = m.locateNode(r.node)
+	}
 	if !ok {
-		return m.setStatus("No source location for "+n.Name, true)
+		return m.setStatus("No source location for "+r.node.Name, true)
 	}
 	if hasServer(m.socket) {
 		if err := openInServer(m.socket, loc.File, loc.Line); err != nil {
@@ -476,9 +502,6 @@ func (m *Model) locateNode(n *tree.Node) (dotnet.Location, bool) {
 		return dotnet.Location{File: n.Path}, true
 	}
 	class, method := n.Class()
-	if class == "" {
-		return dotnet.Location{}, false
-	}
 	key := class + "#" + method
 	if loc, ok := m.locations[key]; ok {
 		return loc, true
@@ -493,37 +516,14 @@ func (m *Model) locateNode(n *tree.Node) (dotnet.Location, bool) {
 	return loc, ok
 }
 
-// Tree navigation helpers.
+// Cursor.
 
-// rebuildRows recomputes the visible rows, keeping the cursor on its node.
-func (m *Model) rebuildRows() {
-	var keep *tree.Node
+// current is the selected row.
+func (m *Model) current() (row, bool) {
 	if m.cursor < len(m.rows) {
-		keep = m.rows[m.cursor]
+		return m.rows[m.cursor], true
 	}
-	m.rows = m.tree.Visible(m.query)
-	m.cursor = 0
-	if i := m.indexOf(keep); i >= 0 {
-		m.cursor = i
-	}
-	m.clampCursor()
-}
-
-func (m *Model) indexOf(n *tree.Node) int {
-	for i, r := range m.rows {
-		if r == n {
-			return i
-		}
-	}
-	return -1
-}
-
-// current is the node under the cursor.
-func (m *Model) current() *tree.Node {
-	if m.cursor < len(m.rows) {
-		return m.rows[m.cursor]
-	}
-	return nil
+	return row{}, false
 }
 
 func (m *Model) move(delta int) {
@@ -540,37 +540,33 @@ func (m *Model) clampCursor() {
 	}
 }
 
-// select moves the cursor to n, expanding its ancestors so it is visible.
+// selectNode moves the cursor to n's tree row, expanding its ancestors.
 func (m *Model) selectNode(n *tree.Node) {
 	for p := n.Parent; p != nil; p = p.Parent {
 		p.Expanded = true
 	}
-	m.rows = m.tree.Visible(m.query)
-	if i := m.indexOf(n); i >= 0 {
-		m.cursor = i
+	m.refresh() // lay the rows out with the ancestors open
+	for i, r := range m.rows {
+		if r.node == n && !r.failure {
+			m.cursor = i
+			break
+		}
 	}
+	m.refresh() // draw the marker on the new row and scroll to it
 }
 
-// allLeaves returns every leaf in tree order.
-func (m *Model) allLeaves() []*tree.Node {
-	var leaves []*tree.Node
-	for _, p := range m.tree.Projects {
-		leaves = append(leaves, p.Leaves()...)
-	}
-	return leaves
-}
-
-// nextWithStatus moves to the next (or previous) leaf with the given status
-// in tree order, wrapping around.
-func (m *Model) nextWithStatus(status tree.Status, forward bool) tea.Cmd {
-	leaves := m.allLeaves()
-	cur := m.current()
+// nextFailed moves to the next (or previous) failed test in tree order,
+// wrapping around.
+func (m *Model) nextFailed(forward bool) tea.Cmd {
+	leaves := m.tree.Leaves()
 	start := -1
-	for i, l := range leaves {
-		if l == cur || (cur != nil && !cur.IsLeaf() && isUnder(l, cur)) {
-			start = i
-			if forward {
-				break
+	if r, ok := m.current(); ok {
+		for i, l := range leaves {
+			if l == r.node || (!r.node.IsLeaf() && isUnder(l, r.node)) {
+				start = i
+				if forward {
+					break
+				}
 			}
 		}
 	}
@@ -581,51 +577,12 @@ func (m *Model) nextWithStatus(status tree.Status, forward bool) tea.Cmd {
 			i = start - step
 		}
 		l := leaves[((i%n)+n)%n]
-		if l.Status() == status {
+		if l.Status() == tree.StatusFailed {
 			m.selectNode(l)
-			m.refreshLog()
 			return nil
 		}
 	}
-	return m.setStatus("No "+statusName(status)+" tests", false)
-}
-
-func statusName(s tree.Status) string {
-	switch s {
-	case tree.StatusFailed:
-		return "failed"
-	case tree.StatusSkipped:
-		return "skipped"
-	case tree.StatusPassed:
-		return "passed"
-	case tree.StatusRunning:
-		return "running"
-	}
-	return "unrun"
-}
-
-// rerunFailed queues a run of every test that failed last time. Theory rows
-// share their method's filter, so each method is included once.
-func (m *Model) rerunFailed() tea.Cmd {
-	var nodes []*tree.Node
-	seen := map[*tree.Node]bool{}
-	for _, l := range m.allLeaves() {
-		if l.Status() != tree.StatusFailed {
-			continue
-		}
-		unit := l
-		if l.Kind == tree.KindCase {
-			unit = l.Parent
-		}
-		if !seen[unit] {
-			seen[unit] = true
-			nodes = append(nodes, unit)
-		}
-	}
-	if len(nodes) == 0 {
-		return m.setStatus("No failed tests to re-run", false)
-	}
-	return m.enqueue(nodes)
+	return m.setStatus("No failed tests", false)
 }
 
 func isUnder(n, ancestor *tree.Node) bool {

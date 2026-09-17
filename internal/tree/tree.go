@@ -1,5 +1,5 @@
-// Package tree arranges tests into project → namespace → class → method →
-// case nodes and tracks their status.
+// Package tree arranges tests into project → class → method → case nodes
+// and tracks their status.
 package tree
 
 import (
@@ -16,7 +16,6 @@ type Kind int
 
 const (
 	KindProject Kind = iota
-	KindNamespace
 	KindClass
 	KindMethod
 	KindCase // one data row of a theory / parameterised test
@@ -37,13 +36,12 @@ const (
 // Node is one entry of the tree.
 type Node struct {
 	Kind     Kind
-	Name     string // label shown in the tree
-	FQN      string // fully qualified name: "Ns", "Ns.Class", "Ns.Class.Method", or the case display name
+	Name     string // label shown in the tree; a class drops the project-name prefix of its namespace
+	FQN      string // fully qualified name: "Ns.Class", "Ns.Class.Method", or the case display name
 	Path     string // project file (project nodes only)
 	Parent   *Node
 	Children []*Node
 	Expanded bool
-	Marked   bool
 
 	// Leaf state; see IsLeaf.
 	status Status
@@ -153,7 +151,7 @@ func (n *Node) Filter() string {
 	switch n.Kind {
 	case KindProject:
 		return ""
-	case KindNamespace, KindClass:
+	case KindClass:
 		return dotnet.FilterPrefix(n.FQN + ".")
 	case KindMethod:
 		return dotnet.FilterExact(n.FQN)
@@ -164,8 +162,8 @@ func (n *Node) Filter() string {
 }
 
 // Class returns the fully qualified class name and method name that declare
-// the node's tests, for locating them in source. Both are empty for
-// projects and namespaces.
+// the node's tests, for locating them in source. Both are empty for a
+// project.
 func (n *Node) Class() (class, method string) {
 	switch n.Kind {
 	case KindClass:
@@ -206,6 +204,8 @@ func (t *Tree) AddProject(path string) *Node {
 
 // SetTests replaces the tests under project with names (display names from
 // --list-tests). Results and expansion of nodes that still exist are kept.
+// New classes start collapsed, so a fresh project reads as a list of
+// classes.
 func (t *Tree) SetTests(project *Node, names []string) {
 	old := map[string]*Node{}
 	for _, n := range collect(project) {
@@ -219,7 +219,6 @@ func (t *Tree) SetTests(project *Node, names []string) {
 	for _, n := range collect(project) {
 		if prev, ok := old[nodeKey(n)]; ok {
 			n.Expanded = prev.Expanded
-			n.Marked = prev.Marked
 			if n.IsLeaf() && prev.IsLeaf() {
 				n.status, n.Result = prev.status, prev.Result
 			}
@@ -245,9 +244,9 @@ func (t *Tree) Leaf(project *Node, name string) *Node {
 		return n
 	}
 	ns, class, method, args := SplitName(name)
-	nsNode := child(project, KindNamespace, ns, ns, true)
-	classNode := child(nsNode, KindClass, class, join(ns, class), true)
-	methodNode := child(classNode, KindMethod, method, join(join(ns, class), method), false)
+	classFQN := join(ns, class)
+	classNode := child(project, KindClass, shortClass(project.Name, classFQN), classFQN, false)
+	methodNode := child(classNode, KindMethod, method, join(classFQN, method), false)
 	leaf := methodNode
 	if args != "" {
 		// A method that previously stood alone becomes the parent of its rows.
@@ -264,6 +263,16 @@ func (t *Tree) Leaf(project *Node, name string) *Node {
 // or nil.
 func (t *Tree) Lookup(project *Node, name string) *Node {
 	return t.leaves[project][name]
+}
+
+// shortClass drops the project name from the front of a class's fully
+// qualified name ("Shop.Core.Tests.Pricing.MoneyTests" in project
+// Shop.Core.Tests becomes "Pricing.MoneyTests").
+func shortClass(project, fqn string) string {
+	if rest, ok := strings.CutPrefix(fqn, project+"."); ok && rest != "" {
+		return rest
+	}
+	return fqn
 }
 
 func join(a, b string) string {
@@ -371,7 +380,7 @@ func appendVisible(rows []*Node, n *Node) []*Node {
 
 func appendMatching(rows []*Node, n *Node, q string) []*Node {
 	if n.IsLeaf() {
-		if strings.Contains(strings.ToLower(n.FQN), q) {
+		if strings.Contains(strings.ToLower(n.FQN), q) || strings.Contains(strings.ToLower(n.Project().Name), q) {
 			return append(rows, n)
 		}
 		return rows
@@ -387,34 +396,24 @@ func appendMatching(rows []*Node, n *Node, q string) []*Node {
 	return rows
 }
 
-// Marked returns every marked node in tree order.
-func (t *Tree) Marked() []*Node {
+// Leaves returns every leaf of the tree in order.
+func (t *Tree) Leaves() []*Node {
 	var out []*Node
 	for _, p := range t.Projects {
-		for _, n := range collect(p) {
-			if n.Marked {
-				out = append(out, n)
-			}
-		}
+		out = append(out, p.Leaves()...)
 	}
 	return out
 }
 
-// ClearMarks unmarks every node.
-func (t *Tree) ClearMarks() {
-	for _, n := range t.Marked() {
-		n.Marked = false
-	}
-}
-
-// SetExpandedAll expands or collapses every interior node below the projects.
-func (t *Tree) SetExpandedAll(expanded bool) {
-	for _, p := range t.Projects {
-		for _, n := range collect(p) {
-			if n.Kind != KindProject && !n.IsLeaf() {
-				n.Expanded = expanded
-			}
+// FoldByResult expands the interior nodes under project that hold a failure
+// and collapses the rest, so a finished run reads like a report: passing
+// classes take one line, failing ones show their tests.
+func (t *Tree) FoldByResult(project *Node) {
+	for _, n := range collect(project) {
+		if n.Kind == KindProject || n.IsLeaf() {
+			continue
 		}
+		n.Expanded = n.Counts().Failed > 0
 	}
 }
 

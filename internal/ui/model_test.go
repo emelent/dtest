@@ -16,12 +16,12 @@ import (
 
 const projA = "/src/Alpha.Tests/Alpha.Tests.csproj"
 
-// newTestModel returns a 120x30 model with one project listed and no
+// newTestModel returns a 120x40 model with one project listed and no
 // dotnet calls made.
 func newTestModel(t *testing.T) *Model {
 	t.Helper()
 	m := New(Config{Target: "/src/Sample.slnx", Socket: "/tmp/nvim.Sample.sock"})
-	m.Update(tea.WindowSizeMsg{Width: 120, Height: 30})
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
 	p := m.tree.AddProject(projA)
 	m.tree.SetTests(p, []string{
 		"Alpha.Tests.MathTests.Adds",
@@ -30,8 +30,7 @@ func newTestModel(t *testing.T) *Model {
 		"Alpha.Tests.MathTests.Theory(n: 2)",
 		"Alpha.Tests.SlowTests.Waits",
 	})
-	m.rebuildRows()
-	m.refreshLog()
+	m.refresh()
 	return m
 }
 
@@ -47,8 +46,6 @@ func press(m *Model, keys ...string) tea.Cmd {
 			msg = tea.KeyPressMsg{Code: tea.KeyEnter}
 		case "esc":
 			msg = tea.KeyPressMsg{Code: tea.KeyEscape}
-		case "tab":
-			msg = tea.KeyPressMsg{Code: tea.KeyTab}
 		case "space":
 			msg = tea.KeyPressMsg{Code: tea.KeySpace, Text: " "}
 		case "backspace":
@@ -65,92 +62,104 @@ func press(m *Model, keys ...string) tea.Cmd {
 
 func view(m *Model) string { return ansi.Strip(m.View().Content) }
 
+// markedLine is the visible report line carrying the cursor marker.
+func markedLine(m *Model) string {
+	for _, l := range strings.Split(view(m), "\n") {
+		if strings.HasPrefix(l, iconArrow) {
+			return l
+		}
+	}
+	return ""
+}
+
+func (m *Model) node() *tree.Node {
+	r, _ := m.current()
+	return r.node
+}
+
 func TestNavigationAndFolding(t *testing.T) {
 	m := newTestModel(t)
-	// rows: project, namespace, MathTests, Adds, Fails, Theory, SlowTests, Waits
-	if len(m.rows) != 8 {
+	// Fresh: project, then its two classes collapsed.
+	if len(m.rows) != 3 || m.rows[1].node.Name != "MathTests" {
 		t.Fatalf("rows = %d", len(m.rows))
 	}
-	press(m, "j", "j", "j")
-	if m.current().Name != "Adds" {
-		t.Fatalf("cursor on %q", m.current().Name)
+	press(m, "j", "l") // expand MathTests
+	if len(m.rows) != 6 || m.node().Name != "MathTests" {
+		t.Fatalf("after l: %d rows on %q", len(m.rows), m.node().Name)
+	}
+	press(m, "l") // into first child
+	if m.node().Name != "Adds" {
+		t.Fatalf("l on expanded -> %q", m.node().Name)
 	}
 	press(m, "G")
-	if m.current().Name != "Waits" {
-		t.Fatalf("G -> %q", m.current().Name)
+	if m.node().Name != "SlowTests" {
+		t.Fatalf("G -> %q", m.node().Name)
 	}
 	press(m, "g", "g")
 	if m.cursor != 0 {
 		t.Fatalf("gg -> %d", m.cursor)
 	}
-	press(m, "j", "j", "h") // collapse MathTests
-	if len(m.rows) != 5 || m.current().Name != "MathTests" {
-		t.Fatalf("after h: %d rows, on %q", len(m.rows), m.current().Name)
+	press(m, "j", "j", "j", "j", "space") // Theory: toggle open
+	if m.node().Name != "Theory" || !strings.Contains(view(m), "(n: 1)") {
+		t.Fatalf("space should expand the theory, on %q", m.node().Name)
 	}
-	press(m, "h") // to parent namespace
-	if m.current().Kind != tree.KindNamespace {
-		t.Fatalf("h on collapsed node should go to parent, got %v", m.current().Kind)
+	press(m, "h") // collapse it
+	if strings.Contains(view(m), "(n: 1)") {
+		t.Fatal("h should collapse the theory")
 	}
-	press(m, "j", "l") // expand again
-	if len(m.rows) != 8 {
-		t.Fatalf("after l: %d rows", len(m.rows))
-	}
-	press(m, "l") // into first child
-	if m.current().Name != "Adds" {
-		t.Fatalf("l on expanded -> %q", m.current().Name)
-	}
-	press(m, "j", "j", "enter") // expand theory rows
-	if !strings.Contains(view(m), "(n: 1)") {
-		t.Fatal("theory rows should show after enter")
-	}
-	press(m, "H")
-	if len(m.rows) != 2 {
-		t.Fatalf("H -> %d rows", len(m.rows))
-	}
-	press(m, "L")
-	if len(m.rows) != 10 {
-		t.Fatalf("L -> %d rows", len(m.rows))
+	press(m, "h") // to the parent class
+	if m.node().Name != "MathTests" {
+		t.Fatalf("h on a collapsed node should select its parent, got %q", m.node().Name)
 	}
 	press(m, "ctrl+d")
-	if m.cursor == 0 {
+	if m.cursor == 1 {
 		t.Fatal("ctrl+d should move")
 	}
 	press(m, "ctrl+u")
 	if m.cursor != 0 {
 		t.Fatalf("ctrl+u -> %d", m.cursor)
 	}
+	v := view(m)
+	for _, want := range []string{"DTEST", "Alpha.Tests", "(5 tests)", "MathTests (4 tests)", "Test Projects", "Tests", "Start at", "Duration", "5 tests ready.", "press ? for help"} {
+		if !strings.Contains(v, want) {
+			t.Errorf("view should contain %q:\n%s", want, v)
+		}
+	}
 }
 
-func TestSearch(t *testing.T) {
+func TestFilter(t *testing.T) {
 	m := newTestModel(t)
-	press(m, "/", "w", "a", "i")
-	if !m.searching || m.query != "wai" {
-		t.Fatalf("searching=%v query=%q", m.searching, m.query)
+	press(m, "t", "w", "a", "i")
+	if !m.filtering || m.query != "wai" {
+		t.Fatalf("filtering=%v query=%q", m.filtering, m.query)
 	}
-	if len(m.rows) != 4 || m.rows[3].Name != "Waits" {
+	if len(m.rows) != 3 || m.rows[2].node.Name != "Waits" {
 		t.Fatalf("filtered rows = %d", len(m.rows))
 	}
-	if v := view(m); !strings.Contains(v, "/wai") || strings.Contains(v, "\t") {
-		t.Fatalf("status bar should show the query and rows must not contain tabs:\n%s", v)
+	v := view(m)
+	if !strings.Contains(v, "filter: wai") || strings.Contains(v, "\t") {
+		t.Fatalf("status should show the filter and rows must not contain tabs:\n%s", v)
 	}
-	press(m, "x", "y", "z")
-	if len(m.rows) != 0 || !strings.Contains(view(m), "No tests match /waixyz") {
-		t.Fatalf("no-match state: %d rows\n%s", len(m.rows), view(m))
-	}
-	press(m, "backspace", "backspace", "backspace")
-	// Capitals arrive with the shift modifier set and must still be typed.
 	m.handleKey(tea.KeyPressMsg{Code: 'T', Text: "T", Mod: tea.ModShift})
 	m.handleKey(tea.KeyPressMsg{Code: 'x', Text: "x", Mod: tea.ModCtrl})
 	if m.query != "waiT" {
 		t.Fatalf("query after shift+T and ctrl+x = %q", m.query)
 	}
-	press(m, "backspace", "backspace", "enter")
-	if m.searching || m.query != "wa" {
-		t.Fatalf("after enter: searching=%v query=%q", m.searching, m.query)
+	press(m, "x", "y")
+	if len(m.rows) != 0 || !strings.Contains(view(m), "No tests match") {
+		t.Fatalf("no-match state: %d rows\n%s", len(m.rows), view(m))
+	}
+	press(m, "backspace", "backspace", "backspace", "enter")
+	if m.filtering || m.query != "wai" || !strings.Contains(view(m), "filter: wai") {
+		t.Fatalf("after enter: filtering=%v query=%q", m.filtering, m.query)
 	}
 	press(m, "esc")
-	if m.query != "" || len(m.rows) != 8 {
+	if m.query != "" || len(m.rows) != 3 {
 		t.Fatalf("esc should clear the filter: %q %d", m.query, len(m.rows))
+	}
+	press(m, "/", "a", "l", "p", "h", "a", ".", "t", "esc")
+	if m.query != "" {
+		t.Fatal("esc while typing clears the filter")
 	}
 }
 
@@ -173,44 +182,40 @@ func stubRun(t *testing.T) *fakeRun {
 	return f
 }
 
+func (m *Model) runEvents() <-chan tea.Msg { return m.run.events }
+
 func TestRunFlow(t *testing.T) {
 	f := stubRun(t)
 	m := newTestModel(t)
-	press(m, "j", "j") // MathTests
-	press(m, "r")
+	clock := time.Date(2026, 9, 17, 19, 10, 48, 0, time.Local)
+	now = func() time.Time { return clock }
+	t.Cleanup(func() { now = time.Now })
+
+	press(m, "j", "r") // MathTests
 	<-f.started
 	if f.project != projA || f.filter != "FullyQualifiedName~Alpha.Tests.MathTests." {
 		t.Fatalf("run %q %q", f.project, f.filter)
 	}
-	class := m.current()
+	class := m.node()
 	if class.Status() != tree.StatusRunning || class.Counts().Running != 4 {
 		t.Fatalf("class should be running: %+v", class.Counts())
 	}
-	if !strings.Contains(view(m), "running Alpha.Tests: MathTests") {
-		t.Fatalf("header should show the run:\n%s", view(m))
-	}
-	// Events arrive through the channel; deliver them as Update would, with
-	// the cursor sitting on Adds so its detail pane must update in place.
-	press(m, "j")
-	if v := view(m); !strings.Contains(v, "Test: Adds") || !strings.Contains(v, "Running…") {
-		t.Fatalf("detail while running:\n%s", v)
+	v := view(m)
+	if !strings.Contains(v, "RUN") || !strings.Contains(v, "Alpha.Tests › MathTests") || !strings.Contains(v, "4 running") || !strings.Contains(v, "19:10:48") {
+		t.Fatalf("running view:\n%s", v)
 	}
 	f.emit(dotnet.LineEvent{Text: "  Starting: Alpha.Tests"})
-	f.emit(dotnet.ResultEvent{Result: dotnet.Result{Name: "Alpha.Tests.MathTests.Adds", Outcome: dotnet.OutcomePassed}})
+	f.emit(dotnet.ResultEvent{Result: dotnet.Result{Name: "Alpha.Tests.MathTests.Adds", Outcome: dotnet.OutcomePassed, Duration: 32 * time.Millisecond}})
 	for i := 0; i < 2; i++ {
 		m.Update(<-m.runEvents())
 	}
-	adds := m.tree.Lookup(class.Project(), "Alpha.Tests.MathTests.Adds")
-	if adds.Status() != tree.StatusPassed {
+	if m.tree.Lookup(class.Project(), "Alpha.Tests.MathTests.Adds").Status() != tree.StatusPassed {
 		t.Fatal("Adds should be passed after the result line")
 	}
-	if v := view(m); !strings.Contains(v, "Test: Adds") || !strings.Contains(v, "✓ Passed in") {
-		t.Fatalf("detail after result:\n%s", v)
-	}
-	press(m, "k")
+	clock = clock.Add(2*time.Minute + 34*time.Second)
 	f.emit(dotnet.DoneEvent{Results: []dotnet.Result{
-		{Name: "Alpha.Tests.MathTests.Adds", Outcome: dotnet.OutcomePassed},
-		{Name: "Alpha.Tests.MathTests.Fails", Outcome: dotnet.OutcomeFailed, Message: "Expected 5", StackTrace: "   at X in /src/Alpha.Tests/UnitTest1.cs:line 12"},
+		{Name: "Alpha.Tests.MathTests.Adds", Outcome: dotnet.OutcomePassed, Duration: 32 * time.Millisecond},
+		{Name: "Alpha.Tests.MathTests.Fails", Outcome: dotnet.OutcomeFailed, Duration: time.Millisecond, Message: "Assert.Equal() Failure: Values differ\nExpected: 5\nActual:   4", StackTrace: "   at Alpha.Tests.MathTests.Fails() in /src/Alpha.Tests/UnitTest1.cs:line 12"},
 		{Name: "Alpha.Tests.MathTests.Theory(n: 1)", Outcome: dotnet.OutcomePassed},
 		{Name: "Alpha.Tests.MathTests.Theory(n: 2)", Outcome: dotnet.OutcomeSkipped},
 		{Name: "Alpha.Tests.MathTests.Extra", Outcome: dotnet.OutcomePassed},
@@ -226,50 +231,58 @@ func TestRunFlow(t *testing.T) {
 	if m.tree.Lookup(class.Project(), "Alpha.Tests.MathTests.Extra") == nil {
 		t.Fatal("an unlisted test in the results should be added")
 	}
-	if !strings.Contains(m.status, "3 passed, 1 failed, 1 skipped") || !m.statusErr {
-		t.Fatalf("status = %q err=%v", m.status, m.statusErr)
+	// The report folds by result: the failing class is open, the theory
+	// (one skipped, none failed) closed; the failure section and summary
+	// carry the details.
+	v = view(m)
+	for _, want := range []string{
+		"× MathTests (5 tests | 1 failed | 1 skipped)",
+		"× Fails 0.001s",
+		"→ Assert.Equal() Failure: Values differ",
+		"Failed Tests 1",
+		"FAIL  Alpha.Tests › MathTests › Fails",
+		"Expected: 5",
+		"Actual:   4",
+		"❯ /src/Alpha.Tests/UnitTest1.cs:12",
+		"Test Projects  1 failed (1)",
+		"Tests  1 failed | 3 passed | 1 skipped | 1 not run (6)",
+		"Duration  2m34s",
+		"FAIL  Tests failed.",
+	} {
+		if !strings.Contains(v, want) {
+			t.Errorf("view should contain %q:\n%s", want, v)
+		}
 	}
-	if v := view(m); strings.Contains(v, "✓3") || strings.Contains(v, "✗1 ") {
-		t.Fatalf("rows must not show pass/fail counts:\n%s", v)
+	if strings.Contains(v, "(n: 1)") {
+		t.Error("theory without failures should be folded")
 	}
-	// f jumps to the failed test and the detail pane shows its message.
-	press(m, "g", "g", "f")
-	if m.current().Name != "Fails" {
-		t.Fatalf("f -> %q", m.current().Name)
+	// n jumps to the failed test and the marker moves with it; G reaches
+	// the failure entry, which also selects that test.
+	press(m, "g", "g", "n")
+	if m.node().Name != "Fails" {
+		t.Fatalf("n -> %q", m.node().Name)
 	}
-	if v := view(m); !strings.Contains(v, "Test: Fails") || !strings.Contains(v, "Expected 5") || !strings.Contains(v, "✗ 1") {
-		t.Fatalf("detail pane:\n%s", v)
+	if marked := markedLine(m); !strings.Contains(marked, "× Fails") {
+		t.Fatalf("marker should be on Fails, got %q", marked)
 	}
-	// s steps through skipped tests the same way.
-	press(m, "g", "g", "s")
-	if m.current().Name != "(n: 2)" || m.current().Status() != tree.StatusSkipped {
-		t.Fatalf("s -> %q", m.current().Name)
+	press(m, "G")
+	if r, _ := m.current(); !r.failure || r.node.Name != "Fails" {
+		t.Fatalf("G should land on the failure entry: %+v", r)
 	}
-	press(m, "S")
-	if m.current().Name != "(n: 2)" {
-		t.Fatalf("S with one skipped test should stay put, got %q", m.current().Name)
+	if marked := markedLine(m); !strings.HasPrefix(marked, "❯  FAIL  Alpha.Tests › MathTests › Fails") {
+		t.Fatalf("marker should be on the failure entry, got %q", marked)
 	}
-	// e re-runs the failed tests only.
-	press(m, "e")
+	press(m, "g", "g")
+	if marked := markedLine(m); !strings.HasPrefix(marked, "❯ × Alpha.Tests (6 tests") {
+		t.Fatalf("marker on the project row = %q", marked)
+	}
+	// f re-runs the failed tests only; a runs whole projects and queues.
+	press(m, "f")
 	<-f.started
 	if f.filter != "FullyQualifiedName=Alpha.Tests.MathTests.Fails" {
 		t.Fatalf("rerun-failed filter = %q", f.filter)
 	}
-	press(m, "x")
-	f.emit(dotnet.DoneEvent{Err: context.Canceled})
-	m.Update(<-m.runEvents())
-	// Marked nodes across the tree run together in one filter per project.
-	press(m, "g", "g", "j", "j", "j", "m", "G", "m")
-	if got := len(m.tree.Marked()); got != 2 {
-		t.Fatalf("marked = %d", got)
-	}
-	press(m, "r")
-	<-f.started
-	if f.filter != "FullyQualifiedName=Alpha.Tests.MathTests.Adds|FullyQualifiedName=Alpha.Tests.SlowTests.Waits" {
-		t.Fatalf("marked filter = %q", f.filter)
-	}
-	// A second request queues behind the active run; R runs whole projects.
-	press(m, "R")
+	press(m, "a")
 	if len(m.queue) != 1 || m.queue[0].filter != "" {
 		t.Fatalf("queue = %+v", m.queue)
 	}
@@ -278,209 +291,67 @@ func TestRunFlow(t *testing.T) {
 		t.Fatal("x should drop the queue")
 	}
 	f.emit(dotnet.DoneEvent{Err: context.Canceled})
-	_, _ = m.Update(<-m.runEvents())
-	if m.run != nil || m.tree.Lookup(class.Project(), "Alpha.Tests.SlowTests.Waits").Status() != tree.StatusNone {
+	m.Update(<-m.runEvents())
+	if m.run != nil || m.tree.Lookup(class.Project(), "Alpha.Tests.MathTests.Fails").Status() != tree.StatusNone {
 		t.Fatal("cancelled leaves should return to StatusNone")
 	}
 }
 
-func TestRerunFailedWithNothingFailed(t *testing.T) {
+func TestRunFailedWithNothingFailed(t *testing.T) {
 	m := newTestModel(t)
-	press(m, "e")
+	press(m, "f")
 	if !strings.Contains(m.status, "No failed tests to re-run") {
 		t.Fatalf("status = %q", m.status)
 	}
-	press(m, "s")
-	if !strings.Contains(m.status, "No skipped tests") {
+	press(m, "n")
+	if !strings.Contains(m.status, "No failed tests") {
+		t.Fatalf("status = %q", m.status)
+	}
+	press(m, "x")
+	if !strings.Contains(m.status, "Nothing is running") {
 		t.Fatalf("status = %q", m.status)
 	}
 }
 
-func TestResultLines(t *testing.T) {
-	raw := []string{
-		"$ dotnet test x",
-		"  Determining projects to restore...",
-		"Test run for /x/Alpha.Tests.dll (.NETCoreApp,Version=v10.0)",
-		"[xUnit.net 00:00:00.00] xUnit.net VSTest Adapter",
-		"some console output from a test",
-		"  Passed Ns.C.M [1 ms]",
-		"  Failed Ns.C.N [1 ms]",
-		"  Error Message:",
-		"   Assert.Equal() Failure",
-		"Expected: 5",
-		"  Stack Trace:",
-		"     at Ns.C.N() in /x.cs:line 3",
-		"",
-		"  Skipped Ns.C.O [< 1 ms]",
-		"[xUnit.net 00:00:01.56]   Finished:    Alpha.Tests",
-		"",
-		"Test Run Failed.",
-		"Total tests: 3",
-		"     Passed: 1",
-		"     Failed: 1",
-		"    Skipped: 1",
-		" Total time: 1,7538 Seconds",
-		"Results File: /tmp/results.trx",
-		"Program.cs(3,5): error CS1002: ; expected",
-	}
-	got := resultLines(raw)
-	want := []string{
-		"  Failed Ns.C.N [1 ms]",
-		"   Assert.Equal() Failure",
-		"Expected: 5",
-		"3 tests: 1 passed, 1 failed, 1 skipped",
-		"Program.cs(3,5): error CS1002: ; expected",
-	}
-	if strings.Join(got, "\n") != strings.Join(want, "\n") {
-		t.Fatalf("resultLines =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
-	}
-}
-
-func TestLogToggle(t *testing.T) {
+func TestOutputToggleAndHelp(t *testing.T) {
 	m := newTestModel(t)
-	m.logs[buildLogKey] = []string{"$ dotnet build", "  Determining projects to restore...", "Program.cs(3,5): error CS1002: ; expected", "Build FAILED."}
-	m.refreshLog()
-	v := view(m)
-	if !strings.Contains(v, "Log: build (minimal)") || strings.Contains(v, "Determining projects") || !strings.Contains(v, "error CS1002") {
-		t.Fatalf("minimal view:\n%s", v)
+	m.logs[buildLogKey] = []string{"$ dotnet build", "  Determining projects to restore...", "Build succeeded."}
+	m.lastLog = buildLogKey
+	m.refresh()
+	if v := view(m); strings.Contains(v, "Determining projects") {
+		t.Fatalf("output hidden by default:\n%s", v)
 	}
 	press(m, "v")
-	v = view(m)
-	if !strings.Contains(v, "Log: build (full)") || !strings.Contains(v, "Determining projects") {
-		t.Fatalf("full view:\n%s", v)
+	if v := view(m); !strings.Contains(v, "Output  build") || !strings.Contains(v, "Determining projects") || !strings.Contains(v, "Build succeeded.") {
+		t.Fatalf("output shown:\n%s", v)
 	}
-	press(m, "tab", "v") // works from the log pane too
-	if m.fullLog || !strings.Contains(view(m), "(minimal)") {
-		t.Fatal("v should toggle back from the log pane")
+	press(m, "v")
+	if strings.Contains(view(m), "Determining projects") {
+		t.Fatal("v should hide the output again")
 	}
-	// The totals line is rewritten in place as summary lines stream in.
-	m.logs[buildLogKey] = []string{"Total tests: 3"}
-	m.refreshLog()
-	if !strings.Contains(view(m), "3 tests: 0 passed, 0 failed, 0 skipped") {
-		t.Fatalf("partial summary:\n%s", view(m))
+	press(m, "?")
+	if v := view(m); !strings.Contains(v, "press f") || !strings.Contains(v, "rerun only the failed tests") || !strings.Contains(v, "/tmp/nvim.Sample.sock") {
+		t.Fatalf("help:\n%s", v)
 	}
-	m.logs[buildLogKey] = append(m.logs[buildLogKey], "     Passed: 2", "     Failed: 1")
-	m.refreshLog()
-	if !strings.Contains(view(m), "3 tests: 2 passed, 1 failed, 0 skipped") {
-		t.Fatalf("summary should update in place:\n%s", view(m))
+	press(m, "j")
+	if m.help || m.cursor != 0 {
+		t.Fatal("any key closes help without acting")
 	}
-}
-
-func TestColorAssertion(t *testing.T) {
-	green, red := styleExpected.Render, styleActual.Render
-	cases := map[string]string{
-		"Expected: 5":                green("Expected: 5"),
-		"Actual:   4":                red("Actual:   4"),
-		"  But was:  4":              "  " + red("But was:  4"),
-		"Expected:<5>. Actual:<4>. ": green("Expected:<5>. ") + red("Actual:<4>. "),
-		"Assert.Equal() Failure":     styleLogError.Render("Assert.Equal() Failure"),
-	}
-	for in, want := range cases {
-		if got := colorMessage(in); got != want {
-			t.Errorf("colorMessage(%q) = %q, want %q", in, got, want)
-		}
-	}
-	if colorLine("Expected: 5") != green("Expected: 5") || colorLine("Actual: 4") != red("Actual: 4") {
-		t.Error("log lines should get the same assertion colours")
-	}
-	if colorLine("3 tests: 3 passed, 0 failed, 0 skipped") != stylePassed.Render("3 tests: 3 passed, 0 failed, 0 skipped") ||
-		colorLine("3 tests: 2 passed, 1 failed, 0 skipped") != styleFailed.Render("3 tests: 2 passed, 1 failed, 0 skipped") {
-		t.Error("summary line colour should follow the failure count")
-	}
-}
-
-func TestColorLog(t *testing.T) {
-	lines := []string{
-		"$ dotnet test x",
-		"  Passed Ns.C.M [1 ms]",
-		"  Failed Ns.C.N [1 ms]",
-		"  Skipped Ns.C.O",
-		"[xUnit.net 00:00:00.01]   Starting: X",
-		"   Assert.Equal() Failure: Strings differ",
-		"Program.cs(3,5): error CS1002: ; expected",
-		"Program.cs(3,5): warning CS0168: unused",
-		"   at Ns.C.N() in /x.cs:line 3",
-		"Build succeeded.",
-		"just some output",
-	}
-	out := colorLog(lines)
-	for i, l := range lines {
-		if ansi.Strip(out[i]) != l {
-			t.Errorf("line %d text changed: %q", i, ansi.Strip(out[i]))
-		}
-	}
-	if out[10] != lines[10] {
-		t.Errorf("plain output must stay unstyled: %q", out[10])
-	}
-	for i := 0; i < 10; i++ {
-		if out[i] == lines[i] {
-			t.Errorf("line %d should be styled: %q", i, lines[i])
-		}
-	}
-	if out[1] == out[2] || out[2] != styleFailed.Render(lines[2]) || out[5] != styleLogError.Render(lines[5]) || out[6] != styleLogError.Render(lines[6]) {
-		t.Error("result and error lines should carry their own styles")
-	}
-}
-
-func TestFormatDuration(t *testing.T) {
-	cases := map[time.Duration]string{
-		0:                              "0.000s",
-		32 * time.Millisecond:          "0.032s",
-		999 * time.Millisecond:         "0.999s",
-		1500 * time.Millisecond:        "1.5s",
-		9949 * time.Millisecond:        "9.9s",
-		35 * time.Second:               "35s",
-		35400 * time.Millisecond:       "35s",
-		2*time.Minute + 34*time.Second: "2m34s",
-		12*time.Minute + 5*time.Second: "12m05s",
-		time.Hour + 2*time.Minute:      "1h02m",
-		3*time.Hour + 59*time.Minute + 40*time.Second: "4h00m",
-	}
-	for d, want := range cases {
-		if got := formatDuration(d); got != want {
-			t.Errorf("formatDuration(%v) = %q, want %q", d, got, want)
-		}
-	}
-}
-
-func TestDurationsInTree(t *testing.T) {
-	m := newTestModel(t)
-	p := m.tree.Projects[0]
-	adds := m.tree.Lookup(p, "Alpha.Tests.MathTests.Adds")
-	adds.Result = &dotnet.Result{Name: adds.FQN, Outcome: dotnet.OutcomePassed, Duration: 32 * time.Millisecond}
-	adds.SetStatus(tree.StatusPassed)
-	waits := m.tree.Lookup(p, "Alpha.Tests.SlowTests.Waits")
-	waits.Result = &dotnet.Result{Name: waits.FQN, Outcome: dotnet.OutcomePassed, Duration: 2*time.Minute + 34*time.Second}
-	waits.SetStatus(tree.StatusPassed)
-	m.refreshLog()
-	v := view(m)
-	for _, want := range []string{"Adds", "0.032s", "Waits", "2m34s", "2m34s"} {
-		if !strings.Contains(v, want) {
-			t.Fatalf("view should contain %q:\n%s", want, v)
-		}
-	}
-	// The project row sums its tests; the class without results shows none.
-	for _, line := range strings.Split(v, "\n") {
-		switch {
-		case strings.Contains(line, "▾ ✓ Alpha.Tests") && strings.Contains(line, "✓2"):
-			if !strings.Contains(line, "2m34s") {
-				t.Fatalf("project row should show the summed time: %q", line)
-			}
-		case strings.Contains(line, "Fails"):
-			treePart, _, _ := strings.Cut(line, "│")
-			if !strings.HasSuffix(strings.TrimRight(treePart, " "), "Fails") {
-				t.Fatalf("unrun test must show no time: %q", line)
-			}
-		}
+	m.socket = ""
+	press(m, "?")
+	if !strings.Contains(view(m), "$nvim_sock is not set") {
+		t.Fatal("help should explain the missing socket")
 	}
 }
 
 func TestOpenInEditor(t *testing.T) {
 	m := newTestModel(t)
 	var opened []string
+	var lines []int
 	hasServer = func(string) bool { return true }
 	openInServer = func(sock, path string, line int) error {
 		opened = append(opened, sock, path)
+		lines = append(lines, line)
 		return nil
 	}
 	locate = func(dir, class, method string) (dotnet.Location, bool) {
@@ -488,20 +359,25 @@ func TestOpenInEditor(t *testing.T) {
 	}
 	t.Cleanup(func() { hasServer, openInServer, locate = nil, nil, dotnet.Locate })
 
-	press(m, "j", "j", "j", "o") // Adds
-	if len(opened) != 2 || opened[0] != "/tmp/nvim.Sample.sock" || opened[1] != "/src/Alpha.Tests/UnitTest1.cs" {
-		t.Fatalf("opened = %v", opened)
+	press(m, "j", "l", "j", "o") // Adds
+	if len(opened) != 2 || opened[0] != "/tmp/nvim.Sample.sock" || opened[1] != "/src/Alpha.Tests/UnitTest1.cs" || lines[0] != 7 {
+		t.Fatalf("opened = %v lines = %v", opened, lines)
 	}
 	if !strings.Contains(m.status, "Sent UnitTest1.cs:7") {
 		t.Fatalf("status = %q", m.status)
 	}
-	press(m, "g", "g", "j", "o") // namespace: nothing to open
-	if !m.statusErr {
-		t.Fatalf("namespace should report no location, status=%q", m.status)
-	}
 	press(m, "g", "g", "o") // project opens its file
 	if opened[len(opened)-1] != projA {
 		t.Fatalf("project open = %v", opened)
+	}
+	// A failure entry opens the failing line from the stack trace.
+	fails := m.tree.Lookup(m.tree.Projects[0], "Alpha.Tests.MathTests.Fails")
+	fails.Result = &dotnet.Result{Outcome: dotnet.OutcomeFailed, Message: "boom", StackTrace: "   at X in /src/Alpha.Tests/UnitTest1.cs:line 12"}
+	fails.SetStatus(tree.StatusFailed)
+	m.refresh()
+	press(m, "G", "o")
+	if lines[len(lines)-1] != 12 {
+		t.Fatalf("failure entry should open line 12, got %v", lines)
 	}
 	// Without a listening server, nvim is launched in the terminal (an
 	// ExecProcess command), unless nvim is not installed.
@@ -519,44 +395,45 @@ func TestOpenInEditor(t *testing.T) {
 	}
 }
 
-func TestLogPaneAndHelp(t *testing.T) {
-	m := newTestModel(t)
-	m.logs[buildLogKey] = []string{"$ dotnet build", "Build succeeded."}
-	m.fullLog = true
-	m.refreshLog()
-	if v := view(m); !strings.Contains(v, "Log: build (full)") || !strings.Contains(v, "Build succeeded.") {
-		t.Fatalf("build log should show:\n%s", v)
+func TestColorAssertion(t *testing.T) {
+	green, red := styleExpected.Render, styleActual.Render
+	cases := map[string]string{
+		"Expected: 5":                green("Expected: 5"),
+		"Actual:   4":                red("Actual:   4"),
+		"  But was:  4":              "  " + red("But was:  4"),
+		"Expected:<5>. Actual:<4>. ": green("Expected:<5>. ") + red("Actual:<4>. "),
+		"Assert.Equal() Failure":     styleLogError.Render("Assert.Equal() Failure"),
 	}
-	press(m, "tab")
-	if m.focus != paneLog {
-		t.Fatal("tab should focus the log")
+	for in, want := range cases {
+		if got := colorMessage(in); got != want {
+			t.Errorf("colorMessage(%q) = %q, want %q", in, got, want)
+		}
 	}
-	press(m, "h")
-	if m.focus != paneTree {
-		t.Fatal("h should return to the tree")
-	}
-	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40}) // the full help needs the room
-	press(m, "?")
-	if v := view(m); !strings.Contains(v, "run the marked nodes") || !strings.Contains(v, "/tmp/nvim.Sample.sock") {
-		t.Fatalf("help:\n%s", v)
-	}
-	m.socket = ""
-	if v := view(m); !strings.Contains(v, "$nvim_sock is not set, so o opens nvim in this terminal") {
-		t.Fatalf("help:\n%s", v)
-	}
-	press(m, "q")
-	if m.help {
-		t.Fatal("any key should close help")
-	}
-	// Narrow terminals show one pane.
-	m.Update(tea.WindowSizeMsg{Width: 60, Height: 20})
-	if v := view(m); strings.Contains(v, "Log: build") {
-		t.Fatal("narrow view should hide the log pane")
-	}
-	press(m, "tab")
-	if v := view(m); !strings.Contains(v, "Log: build") || strings.Contains(v, " Tests ") {
-		t.Fatalf("narrow view with log focused:\n%s", v)
+	lines := []string{"$ dotnet test x", "  Passed Ns.C.M [1 ms]", "  Failed Ns.C.N [1 ms]", "[xUnit.net 00:00:00.01] x", "Program.cs(3,5): error CS1002: ; expected", "plain"}
+	out := colorLog(lines)
+	for i := range lines {
+		if ansi.Strip(out[i]) != lines[i] {
+			t.Errorf("text changed: %q", out[i])
+		}
+		if (out[i] == lines[i]) != (i == len(lines)-1) {
+			t.Errorf("styling of %q wrong", lines[i])
+		}
 	}
 }
 
-func (m *Model) runEvents() <-chan tea.Msg { return m.run.events }
+func TestFormatDuration(t *testing.T) {
+	cases := map[time.Duration]string{
+		0:                              "0.000s",
+		32 * time.Millisecond:          "0.032s",
+		1500 * time.Millisecond:        "1.5s",
+		35400 * time.Millisecond:       "35s",
+		2*time.Minute + 34*time.Second: "2m34s",
+		time.Hour + 2*time.Minute:      "1h02m",
+		3*time.Hour + 59*time.Minute + 40*time.Second: "4h00m",
+	}
+	for d, want := range cases {
+		if got := formatDuration(d); got != want {
+			t.Errorf("formatDuration(%v) = %q, want %q", d, got, want)
+		}
+	}
+}

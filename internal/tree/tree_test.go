@@ -52,27 +52,40 @@ func TestBuildAndVisible(t *testing.T) {
 	if p.Name != "Alpha.Tests" {
 		t.Errorf("project name = %q", p.Name)
 	}
-	// Projects, namespaces and classes start expanded; methods with cases do not.
+	// Projects start expanded with their classes collapsed; class labels drop
+	// the project-name prefix.
 	got := names(tr.Visible(""))
-	want := "Alpha.Tests| Alpha.Other|  X|   Y| Alpha.Tests|  MathTests|   Adds|   Theory|  SlowTests|   Waits"
+	want := "Alpha.Tests| Alpha.Other.X| MathTests| SlowTests"
 	if got != want {
 		t.Fatalf("Visible =\n%s\nwant\n%s", got, want)
+	}
+	for _, c := range p.Children {
+		c.Expanded = true
+	}
+	got = names(tr.Visible(""))
+	want = "Alpha.Tests| Alpha.Other.X|  Y| MathTests|  Adds|  Theory| SlowTests|  Waits"
+	if got != want {
+		t.Fatalf("expanded classes =\n%s\nwant\n%s", got, want)
 	}
 	theory := tr.Lookup(p, "Alpha.Tests.MathTests.Theory(n: 1)").Parent
 	if theory.Kind != KindMethod || theory.IsLeaf() || len(theory.Children) != 2 || theory.Children[0].Name != "(n: 1)" {
 		t.Fatalf("theory node = %+v", theory)
 	}
 	theory.Expanded = true
-	if got := names(tr.Visible("")); !strings.Contains(got, "Theory|    (n: 1)|    (n: 2)|") {
+	if got := names(tr.Visible("")); !strings.Contains(got, "Theory|   (n: 1)|   (n: 2)|") {
 		t.Errorf("expanded theory: %s", got)
 	}
 	if c := p.Counts(); c.Total != 5 {
 		t.Errorf("Total = %d", c.Total)
 	}
-	// Filtering shows matching leaves and their ancestors only.
+	// Filtering shows matching leaves and their ancestors only, and the
+	// project name matches too.
 	got = names(tr.Visible("waits"))
-	if got != "Alpha.Tests| Alpha.Tests|  SlowTests|   Waits" {
+	if got != "Alpha.Tests| SlowTests|  Waits" {
 		t.Errorf("filtered = %s", got)
+	}
+	if got := len(tr.Visible("alpha.tests")); got != 10 {
+		t.Errorf("project-name filter rows = %d", got)
 	}
 	if got := names(tr.Visible("nomatch")); got != "" {
 		t.Errorf("no match = %s", got)
@@ -89,8 +102,8 @@ func TestFiltersAndClass(t *testing.T) {
 	if f := class.Filter(); f != "FullyQualifiedName~Alpha.Tests.MathTests." {
 		t.Errorf("class filter = %q", f)
 	}
-	if f := class.Parent.Filter(); f != "FullyQualifiedName~Alpha.Tests." {
-		t.Errorf("namespace filter = %q", f)
+	if class.Parent != p || class.Name != "MathTests" || class.FQN != "Alpha.Tests.MathTests" {
+		t.Errorf("class node = %+v", class)
 	}
 	if f := p.Filter(); f != "" {
 		t.Errorf("project filter = %q", f)
@@ -160,15 +173,14 @@ func TestSetTestsKeepsStateAndLeafAddsNew(t *testing.T) {
 	adds := tr.Lookup(p, "Alpha.Tests.MathTests.Adds")
 	adds.SetStatus(StatusFailed)
 	adds.Result = &dotnet.Result{Name: adds.FQN, Outcome: dotnet.OutcomeFailed}
-	adds.Parent.Expanded = false
-	adds.Marked = true
+	adds.Parent.Expanded = true
 
 	tr.SetTests(p, []string{"Alpha.Tests.MathTests.Adds", "Alpha.Tests.MathTests.New"})
 	adds2 := tr.Lookup(p, "Alpha.Tests.MathTests.Adds")
 	if adds2 == adds {
 		t.Fatal("SetTests should rebuild nodes")
 	}
-	if adds2.Status() != StatusFailed || adds2.Result == nil || !adds2.Marked || adds2.Parent.Expanded {
+	if adds2.Status() != StatusFailed || adds2.Result == nil || !adds2.Parent.Expanded {
 		t.Errorf("state not carried over: %+v", adds2)
 	}
 	if tr.Lookup(p, "Alpha.Tests.SlowTests.Waits") != nil {
@@ -178,16 +190,22 @@ func TestSetTestsKeepsStateAndLeafAddsNew(t *testing.T) {
 	if n == nil || n.Kind != KindMethod || tr.Lookup(p, "Alpha.Tests.Fresh.Class.Method") != n {
 		t.Error("Leaf should add an unlisted test")
 	}
-	if got := len(tr.Marked()); got != 1 {
-		t.Errorf("Marked = %d", got)
+	if got := len(tr.Leaves()); got != 3 {
+		t.Errorf("Leaves = %d", got)
 	}
-	tr.ClearMarks()
-	if len(tr.Marked()) != 0 {
-		t.Error("ClearMarks")
+}
+
+func TestFoldByResult(t *testing.T) {
+	tr, p := sample()
+	for _, c := range p.Children {
+		c.Expanded = true
 	}
-	// Collapsing everything keeps the projects open so their namespaces show.
-	tr.SetExpandedAll(false)
-	if got := names(tr.Visible("")); got != "Alpha.Tests| Alpha.Tests| Alpha.Tests.Fresh" {
-		t.Errorf("collapsed all = %s", got)
+	tr.Lookup(p, "Alpha.Tests.MathTests.Theory(n: 2)").SetStatus(StatusFailed)
+	tr.Lookup(p, "Alpha.Tests.SlowTests.Waits").SetStatus(StatusPassed)
+	tr.FoldByResult(p)
+	got := names(tr.Visible(""))
+	want := "Alpha.Tests| Alpha.Other.X| MathTests|  Adds|  Theory|   (n: 1)|   (n: 2)| SlowTests"
+	if got != want {
+		t.Fatalf("folded =\n%s\nwant\n%s", got, want)
 	}
 }

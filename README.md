@@ -1,31 +1,47 @@
 # dtest
 
-Run the tests of a .NET solution or project from a tree in the terminal.
-`dtest` is a Go TUI built on [bubbletea v2](https://github.com/charmbracelet/bubbletea)
-that drives the `dotnet` CLI: it builds once, lists every test, and runs
-whatever part of the tree you select while streaming the output.
+Run the tests of a .NET solution or project from the terminal, in the style
+of vitest's watch UI. `dtest` is a Go TUI built on
+[bubbletea v2](https://github.com/charmbracelet/bubbletea) that drives the
+`dotnet` CLI: it builds once, lists every test, and runs whatever you select
+while the report updates live.
 
 ```
- dtest  Sample   ✓ 4  ✗ 1  ○ 0   6 tests
- Tests                                    │ Test: Fails
- ▾ ✗ Alpha.Tests                    1.5s  │Alpha.Tests.MathTests.Fails
-   ▾ ✗ Alpha.Tests                  1.5s  │
-     ▾ ✗ MathTests                 0.004s │✗ Failed in 0.001s
-         ✓ Adds                    0.001s │
-         ✗ Fails                   0.001s │Message
-       ▸ ✓ Theory                  0.002s │Assert.Equal() Failure: Values differ
-     ▾ ✓ SlowTests                  1.5s  │Expected: 5
-         ✓ Waits                    1.5s  │Actual:   4
+  DTEST  Shop
+ × Shop.Api.Tests (16 tests | 1 failed | 1 skipped) 1.1s
+   ✓ Controllers.OrdersControllerTests (3 tests) 0.307s
+   ✓ Integration.CheckoutFlowTests (2 tests | 1 skipped) 0.803s
+   × Middleware.RateLimitMiddlewareTests (2 tests | 1 failed) 0.002s
+     × OverLimit_Returns429 0.001s
+       → Assert.Equal() Failure: Values differ
+     ✓ UnderLimit_Passes 0.001s
+ ✓ Shop.Core.Tests (33 tests | 1 skipped) 1.2s
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  Shop.Api.Tests › Middleware.RateLimitMiddlewareTests › OverLimit_Returns429
+Assert.Equal() Failure: Values differ
+Expected: 429
+Actual:   428
+ ❯ tests/Shop.Api.Tests/Middleware/RateLimitMiddlewareTests.cs:12
+
+ Test Projects  1 failed | 1 passed (2)
+         Tests  1 failed | 46 passed | 2 skipped (49)
+      Start at  20:51:13
+      Duration  3.8s
+  FAIL  Tests failed.  press ? for help, q to quit
 ```
 
 ## Features
 
-- Tree from project down to namespace, class, method and theory row
-- Run a project, namespace, class, method or a set of marked nodes; runs queue up, one `dotnet test` per project
-- Live status while tests run: a spinner on the running tests, ✓ / ✗ / ○ as each result comes in, counts rolled up to every parent
-- Log pane with the streamed `dotnet test` output coloured by kind (results green, red and yellow, errors red, runner chatter dim), or the message, stack trace and captured output of the selected test. Expected values are green and actual values red in every failure message. By default the log is minimal: each failing test with its assertion or exception, one line of totals per run, and build errors; `v` reveals everything
-- Open the selected test's source in Neovim, either a running instance (via the socket in `$nvim_sock`) or one launched in place
-- Vim motions throughout; `/` filters the tree as you type
+- One scrolling report: projects, then classes, then tests and theory rows; a cursor moves over it with vim motions
+- Run the selected project, class, method or test; `a` runs everything, `f` re-runs only what failed; runs queue up, one `dotnet test` per project
+- Live status while tests run: a spinner on the running tests, ✓ × ↓ as each result comes in, counts and durations on every parent
+- After a run, passing classes fold to one line and failing ones open, as vitest does
+- A "Failed Tests" section with each failure's message (expected values green, actual values red) and the source location from its stack trace
+- Fixed summary of projects, tests, start time and duration
+- The raw `dotnet` output stays hidden; `v` shows it, coloured by kind
+- Open the selected test in Neovim, either a running instance (via the socket in `$nvim_sock`) or one launched in place; a failure entry opens the failing line
 
 ## Requirements
 
@@ -69,32 +85,30 @@ Press `?` in the app for this list.
 | Key | Action |
 | --- | --- |
 | `j` / `k`, `↓` / `↑` | Move |
-| `gg` / `G` | First / last row |
-| `ctrl+d` / `ctrl+u`, `ctrl+f` / `ctrl+b` | Half page / page |
-| `h` / `l` | Collapse (or go to the parent) / expand (or enter) |
-| `enter` | Toggle a folder; run a test |
-| `H` / `L` | Collapse / expand everything |
-| `m` | Mark the node for a run (● in the margin) |
-| `u`, `esc` | Clear marks (`esc` clears the filter first) |
-| `r` | Run the marked nodes, or the node under the cursor |
-| `R` | Run every project |
-| `e` | Re-run every test that failed |
+| `gg` / `G` | First / last line |
+| `ctrl+d` / `ctrl+u` | Half page |
+| `ctrl+e` / `ctrl+y` | Scroll the report without moving the cursor |
+| `l` / `h` | Expand / collapse a project, class or theory (`h` on a collapsed node selects its parent) |
+| `space` | Toggle a fold |
+| `enter`, `r` | Run the selected project, class or test |
+| `a` | Run every project |
+| `f` | Re-run only the failed tests |
 | `x` | Cancel the running tests and drop the queue |
-| `f` / `F` | Next / previous failed test |
-| `s` / `S` | Next / previous skipped test |
-| `/` | Filter the tree by name; `enter` keeps the filter, `esc` clears it |
-| `o` | Open the test in Neovim |
-| `v` | Log pane: minimal (default) or the full dotnet output |
-| `tab` | Focus the log pane (`j`/`k`, `ctrl+d`/`u`, `g`/`G` scroll; `h`, `esc` or `tab` return) |
+| `n` / `N` | Next / previous failed test |
+| `o` | Open the selected test in Neovim; on a failure entry, the failing line |
+| `t`, `/` | Filter by test or project name; `enter` keeps the filter, `esc` clears it |
+| `v` | Show or hide the raw dotnet output |
 | `ctrl+r` | Rebuild and list the tests again |
 | `q`, `ctrl+c` | Quit |
 
 Runs use `dotnet test --filter`: `FullyQualifiedName~Ns.Class.` for a class
-or namespace and `FullyQualifiedName=Ns.Class.Method` for a method. A
-theory row cannot be addressed on its own, so running one runs its method.
-Results come from the console logger as they happen and from a TRX file
-when the run ends, so a test that was not listed (added since the last
-reload) still appears.
+and `FullyQualifiedName=Ns.Class.Method` for a method. A theory row cannot
+be addressed on its own, so running one runs its method. Results come from
+the console logger as they happen and from a TRX file when the run ends, so
+a test that was not listed (added since the last reload) still appears.
+
+Durations are `0.032s` below a second, `1.5s` below ten, `35s` below a
+minute, then `2m34s`. A parent shows the sum of its tests' times.
 
 ## Neovim
 
@@ -110,10 +124,11 @@ nvim --listen "$nvim_sock"
 dtest sample/Shop.slnx        # in another pane; o now sends files to that Neovim
 ```
 
-and `o` runs `nvim --server <socket> --remote-expr "execute('edit +LINE ' . fnameescape('/path/file.cs'))"`,
+`o` runs `nvim --server <socket> --remote-expr "execute('edit +LINE ' . fnameescape('/path/file.cs'))"`,
 then, inside tmux, selects the window named `code` in the current session.
 When `nvim_sock` is not set, or nothing is listening on it, `nvim +LINE file`
-opens in the dtest terminal and dtest resumes when you quit it.
+opens in the dtest terminal and dtest resumes when you quit it. macOS limits
+socket paths to about 100 characters, so keep the socket under `/tmp`.
 
 ## Try it
 
@@ -135,9 +150,9 @@ make fmt vet         # gofmt and go vet
 ```
 
 ```
-main.go              flags, tea.NewProgram
+main.go              flags, target discovery, tea.NewProgram
 internal/dotnet      solution/project discovery, --list-tests, streamed runs, TRX parsing, source lookup, filters
-internal/tree        project → namespace → class → method → case nodes, status roll-up, visible rows
+internal/tree        project → class → method → case nodes, status roll-up, durations, folding, visible rows
 internal/editor      Neovim hand-off (--remote-expr + tmux) and in-terminal launch
-internal/ui          the bubbletea model: tree pane, log/detail pane, keys, rendering
+internal/ui          the bubbletea model: report builder, keys, summary and status, output colouring
 ```
