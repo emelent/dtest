@@ -14,28 +14,31 @@ import (
 )
 
 const (
-	headerH  = 1
-	titleH   = 1  // each pane has a title line
-	minWidth = 40 // below this the bottom panes stack one above the other
+	headerH = 1
+	titleH  = 1 // each pane has a title line
 )
 
 // geometry is the current pane arrangement.
 type geometry struct {
-	logH          int // log pane body height (top, full width)
-	treeW, statsW int // bottom pane widths
-	bottomH       int // bottom pane body height
+	logH    int // log pane body height (top, full width)
+	bottomH int // bottom pane body height
+	treeW   int // width left for the tree beside the summary
+	statsW  int // width of the right-aligned summary; 0 when it does not fit
 }
 
-// layout splits the window: the log takes about 70% of the height, the
-// tree and the stats share the rest side by side.
+// layout splits the window: the log takes about 70% of the height; the
+// bottom pane holds the tree with the summary right-aligned beside it.
 func (m *Model) layout() geometry {
 	body := max(4, m.height-headerH-2*titleH)
 	g := geometry{}
 	g.logH = max(1, body*7/10)
 	g.bottomH = max(1, body-g.logH)
-	g.treeW = m.width / 2
-	g.statsW = m.width - g.treeW - 1 // one column for the separator
-	if g.statsW < 1 {
+	stats := m.statsLines()
+	for _, l := range stats {
+		g.statsW = max(g.statsW, ansi.StringWidth(l))
+	}
+	g.treeW = m.width - g.statsW - 2
+	if g.treeW < 30 {
 		g.treeW, g.statsW = m.width, 0
 	}
 	m.log.SetWidth(max(1, m.width))
@@ -55,13 +58,7 @@ func (m *Model) View() tea.View {
 	if m.help {
 		top = lipgloss.JoinVertical(lipgloss.Left, m.paneTitle("Usage", true, m.width), m.renderHelp(g.logH))
 	}
-	left := lipgloss.JoinVertical(lipgloss.Left, m.paneTitle(m.treeTitle(), m.focus == paneTree, g.treeW), m.treeView.View())
-	bottom := left
-	if g.statsW > 0 {
-		sep := strings.TrimRight(strings.Repeat(styleDim.Render("│")+"\n", g.bottomH+titleH), "\n")
-		right := lipgloss.JoinVertical(lipgloss.Left, m.paneTitle("Summary", m.focus == paneStats, g.statsW), m.renderStats(g.statsW, g.bottomH))
-		bottom = lipgloss.JoinHorizontal(lipgloss.Top, left, sep, right)
-	}
+	bottom := lipgloss.JoinVertical(lipgloss.Left, m.paneTitle(m.treeTitle(), m.focus == paneTree, m.width), m.renderBottom(g))
 	content := lipgloss.JoinVertical(lipgloss.Left, m.renderHeader(), top, bottom)
 	v := tea.NewView(content)
 	v.AltScreen = true
@@ -81,17 +78,18 @@ func (m *Model) paneTitle(title string, focused bool, width int) string {
 }
 
 func (m *Model) logTitle() string {
+	n := m.current()
 	if m.showOutput {
 		name := "build"
-		if m.lastLog != "" && m.lastLog != buildLogKey {
-			name = strings.TrimSuffix(filepath.Base(m.lastLog), filepath.Ext(m.lastLog))
+		if n != nil && m.logs[n.Project().Path] != nil {
+			name = n.Project().Name
 		}
 		return "Output  " + name
 	}
-	if n := len(m.fails); n > 0 {
-		return fmt.Sprintf("Failed Tests %d", n)
+	if n == nil {
+		return "Log"
 	}
-	return "Log"
+	return "Log  " + breadcrumb(n)
 }
 
 func (m *Model) treeTitle() string {
@@ -104,8 +102,8 @@ func (m *Model) treeTitle() string {
 	return "Tests"
 }
 
-// refresh rebuilds both panes from the tree and scrolls their cursors into
-// view.
+// refresh rebuilds both panes from the tree: the rows around the cursor,
+// and the log for the selected node.
 func (m *Model) refresh() {
 	m.layout()
 	m.refreshTree()
@@ -116,8 +114,10 @@ func (m *Model) refreshTree() {
 	keep := m.current()
 	m.rows = m.tree.Visible(m.query)
 	m.cursor = 0
-	for i, r := range m.rows {
-		if r == keep {
+	// Keep the cursor on its node or, when a fold hid it, its nearest
+	// visible ancestor.
+	for n := keep; n != nil; n = n.Parent {
+		if i := indexOf(m.rows, n); i >= 0 {
 			m.cursor = i
 			break
 		}
@@ -140,6 +140,15 @@ func (m *Model) refreshTree() {
 	}
 }
 
+func indexOf(rows []*tree.Node, n *tree.Node) int {
+	for i, r := range rows {
+		if r == n {
+			return i
+		}
+	}
+	return -1
+}
+
 func (m *Model) emptyTreeMessage() string {
 	switch {
 	case m.building:
@@ -152,88 +161,146 @@ func (m *Model) emptyTreeMessage() string {
 	return styleDim.Render("  No tests found")
 }
 
-// refreshLog lays out the failure entries (or the raw output) and scrolls
-// the selected entry into view.
+// refreshLog shows the results for the node under the tree cursor (or the
+// raw output of its project). Selecting another node starts at the top; a
+// log that is being appended to keeps following its tail.
 func (m *Model) refreshLog() {
-	keep := m.currentFailure()
-	m.fails = m.fails[:0]
-	for _, l := range m.tree.Leaves() {
-		if l.Status() == tree.StatusFailed && l.Result != nil {
-			m.fails = append(m.fails, l)
-		}
-	}
-	m.failCursor = 0
-	for i, f := range m.fails {
-		if f == keep {
-			m.failCursor = i
-			break
-		}
-	}
-	m.failCursor = clamp(m.failCursor, len(m.fails))
-
+	n := m.current()
 	var lines []string
-	m.failLines = m.failLines[:0]
 	if m.showOutput {
-		out := m.logs[m.lastLog]
+		key := buildLogKey
+		if n != nil && m.logs[n.Project().Path] != nil {
+			key = n.Project().Path
+		}
+		out := m.logs[key]
 		if len(out) == 0 {
 			lines = append(lines, styleDim.Render("  (no output yet)"))
 		}
 		lines = append(lines, colorLog(out)...)
 	} else {
-		lines = m.renderFailures()
+		lines = m.renderNodeLog(n)
 	}
 	for i, l := range lines {
 		lines[i] = ansi.Truncate(l, m.log.Width(), "…")
 	}
 	sig := strings.Join(lines, "\n")
-	if sig != m.logSig {
-		m.logSig = sig
-		m.log.SetContentLines(lines)
+	if sig == m.logSig && n == m.logNode {
+		return
 	}
-	if !m.showOutput && m.failCursor < len(m.failLines) {
-		m.log.EnsureVisible(m.failLines[m.failCursor], 0, 0)
+	follow := m.log.AtBottom() || m.log.PastBottom()
+	changed := n != m.logNode
+	m.logSig, m.logNode = sig, n
+	m.log.SetContentLines(lines)
+	switch {
+	case changed:
+		m.log.GotoTop()
+	case m.showOutput && follow:
+		m.log.GotoBottom()
 	}
 }
 
-// renderFailures is the minimal log: build errors, then every failed test
-// with its message and location, or a line saying there is nothing to show.
-func (m *Model) renderFailures() []string {
+// renderNodeLog is the minimal log for a node: build errors first, then
+// for a test its result, message, stack trace and output; for a group its
+// counts and every failure beneath it.
+func (m *Model) renderNodeLog(n *tree.Node) []string {
 	var lines []string
 	if errs := buildErrors(m.logs[buildLogKey]); len(errs) > 0 {
 		lines = append(lines, "  "+badgeFail.Render("BUILD")+" "+styleBold.Render(filepath.Base(m.cfg.Target)))
 		lines = append(lines, colorLog(errs)...)
 		lines = append(lines, "")
 	}
-	if len(m.fails) == 0 {
-		switch {
-		case len(lines) > 0:
-		case m.run != nil:
-			lines = append(lines, "  "+m.spin.View()+" Running "+m.run.req.label+"…")
-		case m.runsDone:
-			lines = append(lines, "  "+stylePassed.Render(iconPassed+" No failed tests."))
-		default:
-			lines = append(lines, styleDim.Render("  Failures appear here. Select a project, class or test below and press enter to run it, a for everything."))
+	if n == nil {
+		if len(lines) == 0 {
+			lines = append(lines, styleDim.Render("  Select a project, class or test below; its results show here."))
 		}
 		return lines
 	}
-	for i, l := range m.fails {
-		if i > 0 {
-			lines = append(lines, "", styleDim.Render(strings.Repeat(rule, m.log.Width())), "")
-		}
-		m.failLines = append(m.failLines, len(lines))
-		marker := " "
-		if i == m.failCursor {
-			marker = m.marker(m.focus == paneLog)
-		}
-		lines = append(lines, marker+" "+badgeFail.Render("FAIL")+" "+styleBold.Render(breadcrumb(l)))
-		for _, ml := range strings.Split(strings.TrimRight(l.Result.Message, "\n"), "\n") {
-			lines = append(lines, colorMessage(ml))
-		}
-		if loc, ok := l.Result.FailureLocation(); ok {
-			lines = append(lines, styleLocation.Render(fmt.Sprintf(" %s %s:%d", iconArrow, displayPath(loc.File), loc.Line)))
+	if n.IsLeaf() {
+		return append(lines, m.renderLeafLog(n)...)
+	}
+	c := n.Counts()
+	head := "  " + m.statusIcon(n.Status()) + " " + styleBold.Render(breadcrumb(n)) + " " + m.renderCounts(c)
+	if d := n.Duration(); d > 0 {
+		head += " " + styleDim.Render(formatDuration(d))
+	}
+	lines = append(lines, head)
+	var failed []*tree.Node
+	for _, l := range n.Leaves() {
+		if l.Status() == tree.StatusFailed && l.Result != nil {
+			failed = append(failed, l)
 		}
 	}
+	switch {
+	case len(failed) > 0:
+		for _, l := range failed {
+			lines = append(lines, "")
+			lines = append(lines, m.renderFailure(l, false)...)
+		}
+	case c.Running > 0:
+		lines = append(lines, "", "  "+m.spin.View()+fmt.Sprintf(" %d running…", c.Running))
+	case c.Passed+c.Skipped > 0:
+		lines = append(lines, "", "  "+stylePassed.Render(iconPassed+" No failed tests."))
+	default:
+		lines = append(lines, "", styleDim.Render("  Not run yet. Press enter to run it, a for everything."))
+	}
 	return lines
+}
+
+// renderLeafLog describes one test's latest result.
+func (m *Model) renderLeafLog(n *tree.Node) []string {
+	r := n.Result
+	head := "  " + m.statusIcon(n.Status()) + " " + styleBold.Render(breadcrumb(n))
+	switch {
+	case n.Status() == tree.StatusRunning:
+		return []string{head, "", "  " + m.spin.View() + " Running…"}
+	case r == nil:
+		return []string{head, "", styleDim.Render("  Not run yet. Press enter to run it, o to open it in nvim.")}
+	case n.Status() == tree.StatusFailed:
+		return append([]string{head, ""}, m.renderFailure(n, true)...)
+	}
+	lines := []string{head + " " + styleDim.Render(formatDuration(r.Duration)), ""}
+	switch n.Status() {
+	case tree.StatusSkipped:
+		lines = append(lines, "  "+styleSkipped.Render(iconSkipped+" Skipped"))
+		if r.Message != "" {
+			lines = append(lines, styleDim.Render("  "+r.Message))
+		}
+	default:
+		lines = append(lines, "  "+stylePassed.Render(iconPassed+" Passed in "+formatDuration(r.Duration)))
+	}
+	return append(lines, outputLines(r.Output)...)
+}
+
+// renderFailure is one failed test: FAIL badge and breadcrumb, the message
+// with its assertion coloured, the failing location and, in full, the
+// stack trace and captured output.
+func (m *Model) renderFailure(l *tree.Node, full bool) []string {
+	r := l.Result
+	lines := []string{"  " + badgeFail.Render("FAIL") + " " + styleBold.Render(breadcrumb(l)) + " " + styleDim.Render(formatDuration(r.Duration))}
+	for _, ml := range strings.Split(strings.TrimRight(r.Message, "\n"), "\n") {
+		lines = append(lines, colorMessage(ml))
+	}
+	if loc, ok := r.FailureLocation(); ok {
+		lines = append(lines, styleLocation.Render(fmt.Sprintf(" %s %s:%d", iconArrow, displayPath(loc.File), loc.Line)))
+	}
+	if full && r.StackTrace != "" {
+		lines = append(lines, "", styleDim.Render("  Stack trace"))
+		for _, sl := range strings.Split(r.StackTrace, "\n") {
+			lines = append(lines, styleDim.Render(sl))
+		}
+	}
+	if full {
+		lines = append(lines, outputLines(r.Output)...)
+	}
+	return lines
+}
+
+func outputLines(output string) []string {
+	if output == "" {
+		return nil
+	}
+	lines := []string{"", styleDim.Render("  Output")}
+	return append(lines, strings.Split(output, "\n")...)
 }
 
 // buildErrors keeps the error lines of a build log.
@@ -247,12 +314,31 @@ func buildErrors(log []string) []string {
 	return out
 }
 
-// marker is the cursor glyph, bright in the focused pane and dim elsewhere.
+// marker is the cursor glyph, bright when the tree is focused and dim when
+// the log is.
 func (m *Model) marker(focused bool) string {
 	if focused {
 		return styleKey.Render(iconArrow)
 	}
 	return styleDim.Render(iconArrow)
+}
+
+// renderBottom draws the tree with the summary right-aligned beside it: the
+// summary block keeps its label column and sits flush with the right edge.
+func (m *Model) renderBottom(g geometry) string {
+	tree := m.treeView.View()
+	if g.statsW == 0 {
+		return tree
+	}
+	stats := m.statsLines()
+	for len(stats) < g.bottomH {
+		stats = append(stats, "")
+	}
+	for i, l := range stats {
+		stats[i] = fit(l, g.statsW)
+	}
+	right := strings.Join(stats[:g.bottomH], "\n")
+	return lipgloss.JoinHorizontal(lipgloss.Top, tree, "  ", right)
 }
 
 // renderNode draws one tree line: marker, glyph, name and, for groups, the
@@ -358,9 +444,10 @@ func (m *Model) renderHeader() string {
 	return fitLine(" "+left, right+" ", m.width)
 }
 
-// renderStats fills the bottom-right pane: vitest's summary block, then
-// the state badge and the key hint.
-func (m *Model) renderStats(width, height int) string {
+// statsLines is vitest's summary block, then the state badge and the key
+// hint; it is right-aligned beside the tree.
+func (m *Model) statsLines() []string {
+	width := max(40, m.width-32) // leave the tree at least 30 columns
 	var lines []string
 	if !m.batchStart.IsZero() {
 		var pc tree.Counts
@@ -395,14 +482,7 @@ func (m *Model) renderStats(width, height int) string {
 		c := m.tree.Counts()
 		lines = append(lines, summaryLabel("Tests")+styleDim.Render(fmt.Sprintf("(%d)", c.Total)), "")
 	}
-	lines = append(lines, m.renderStatusLines()...)
-	for len(lines) < height {
-		lines = append(lines, "")
-	}
-	for i, l := range lines {
-		lines[i] = fit(l, width)
-	}
-	return strings.Join(lines[:height], "\n")
+	return append(lines, m.renderStatusLines()...)
 }
 
 // summaryLabelW is the width of the summary's label column: the longest
@@ -498,10 +578,9 @@ func (m *Model) renderStatusLines() []string {
 type helpRow struct{ keys, desc string }
 
 var helpRows = []helpRow{
-	{"ctrl+k / ctrl+j", "to focus the log above / the tree below"},
-	{"ctrl+h / ctrl+l", "to focus the tree / the summary"},
-	{"j / k", "to move (in the log: between failures)"},
-	{"gg / G", "to jump to the first / last entry"},
+	{"ctrl+j / ctrl+k", "to switch between the log and the tree"},
+	{"j / k", "to move through the tree, or scroll the log"},
+	{"gg / G", "to jump to the top / bottom"},
 	{"ctrl+d / ctrl+u", "to move half a page"},
 	{"l / h", "to expand / collapse a project, class or theory"},
 	{"enter or r", "to run the selected project, class or test"},
@@ -509,9 +588,9 @@ var helpRows = []helpRow{
 	{"f", "to rerun only the failed tests"},
 	{"x", "to cancel the running tests"},
 	{"n / N", "to jump to the next / previous failure"},
-	{"o", "to open the selection in Neovim (from the log: the failing line)"},
+	{"o", "to open the selected test in Neovim (from the log: its failing line)"},
 	{"t or /", "to filter the tree by test or project name (enter keeps it, esc clears it)"},
-	{"v", "to show or hide the raw dotnet output in the log pane"},
+	{"v", "to show the raw dotnet output of the selected project instead"},
 	{"ctrl+r", "to rebuild and list the tests again"},
 	{"q", "to quit"},
 }

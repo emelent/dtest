@@ -61,7 +61,7 @@ func press(m *Model, keys ...string) tea.Cmd {
 
 func view(m *Model) string { return ansi.Strip(m.View().Content) }
 
-// markedLines are the visible lines carrying a cursor marker.
+// markedLines are the visible lines carrying the cursor marker.
 func markedLines(m *Model) []string {
 	var out []string
 	for _, l := range strings.Split(view(m), "\n") {
@@ -88,14 +88,24 @@ func TestLayoutAndNavigation(t *testing.T) {
 		t.Fatalf("rows = %d", len(m.rows))
 	}
 	v := view(m)
-	containsAll(t, v, "DTEST", "⎯⎯ Log ⎯", "⎯⎯ Tests ⎯", "⎯⎯ Summary ⎯", "│", "Failures appear here", "· Alpha.Tests (5 tests)", "· MathTests (4 tests)",
+	containsAll(t, v, "DTEST", "⎯⎯ Log  Alpha.Tests ⎯", "⎯⎯ Tests ⎯", "· Alpha.Tests (5 tests)", "Not run yet",
 		"Ready. 5 tests in 1 projects.", "press ? to show help, press q to quit")
-	if strings.Contains(v, "Start at") {
-		t.Error("summary should be blank before the first run")
+	if strings.Contains(v, "Start at") || strings.Contains(v, "Summary") || strings.Contains(v, "│") {
+		t.Errorf("one bottom pane, no summary block before the first run:\n%s", v)
+	}
+	// The summary block sits flush with the right edge of the bottom pane,
+	// its widest line ending at the last column.
+	for _, l := range strings.Split(v, "\n") {
+		if strings.Contains(l, "press ? to show help") && !strings.HasSuffix(l, "press q to quit") {
+			t.Errorf("hint should end at the right edge: %q", l)
+		}
+	}
+	if strings.Contains(v, "(5 tests) 0.000s") {
+		t.Error("unrun groups show no duration")
 	}
 	// The log pane is about 70% of the height: header + title + log + title + bottom = 40.
 	g := m.layout()
-	if g.logH < 24 || g.logH > 27 || g.bottomH+g.logH+headerH+2*titleH != 40 || g.treeW != 60 || g.statsW != 59 {
+	if g.logH < 24 || g.logH > 27 || g.bottomH+g.logH+headerH+2*titleH != 40 || g.statsW == 0 || g.treeW+g.statsW+2 != 120 {
 		t.Fatalf("geometry = %+v", g)
 	}
 
@@ -140,7 +150,7 @@ func TestLayoutAndNavigation(t *testing.T) {
 	}
 }
 
-func TestPaneFocus(t *testing.T) {
+func TestPaneFocusAndLogScroll(t *testing.T) {
 	m := newTestModel(t)
 	if m.focus != paneTree {
 		t.Fatal("the tree is focused first")
@@ -149,29 +159,37 @@ func TestPaneFocus(t *testing.T) {
 	if m.focus != paneLog {
 		t.Fatal("ctrl+k focuses the log")
 	}
-	press(m, "j", "j") // nothing to select yet, and the tree cursor stays put
-	if m.cursor != 0 {
-		t.Fatal("log keys must not move the tree cursor")
-	}
-	press(m, "ctrl+l")
-	if m.focus != paneLog {
-		t.Fatal("ctrl+l from the log does nothing")
-	}
-	press(m, "ctrl+j", "ctrl+l")
-	if m.focus != paneStats {
-		t.Fatal("ctrl+j then ctrl+l reaches the stats")
-	}
-	press(m, "ctrl+h")
+	press(m, "ctrl+k")
 	if m.focus != paneTree {
-		t.Fatal("ctrl+h returns to the tree")
+		t.Fatal("ctrl+k wraps back to the tree")
 	}
-	press(m, "ctrl+l", "backspace")
+	press(m, "ctrl+j", "ctrl+j")
 	if m.focus != paneTree {
-		t.Fatal("backspace stands in for ctrl+h")
+		t.Fatal("ctrl+j wraps too")
 	}
-	press(m, "ctrl+l", "ctrl+k", "ctrl+j")
-	if m.focus != paneTree {
-		t.Fatal("ctrl+k from the stats goes to the log, ctrl+j down to the tree")
+	// Give the log more lines than fit and scroll it from the log pane.
+	fails := m.tree.Lookup(m.tree.Projects[0], "Alpha.Tests.MathTests.Fails")
+	fails.Result = &dotnet.Result{Outcome: dotnet.OutcomeFailed, Message: "boom", StackTrace: strings.Repeat("   at X in /src/a.cs:line 1\n", 60)}
+	fails.SetStatus(tree.StatusFailed)
+	press(m, "j", "l", "j", "j") // select Fails
+	if m.current() != fails || m.log.YOffset() != 0 {
+		t.Fatalf("selecting a node shows its log from the top: %q offset %d", m.current().Name, m.log.YOffset())
+	}
+	press(m, "ctrl+j", "j", "j")
+	if m.focus != paneLog || m.log.YOffset() != 2 || m.current() != fails {
+		t.Fatalf("j in the log scrolls it: focus=%v offset=%d", m.focus, m.log.YOffset())
+	}
+	press(m, "G")
+	if !m.log.AtBottom() {
+		t.Fatal("G scrolls to the bottom")
+	}
+	press(m, "g", "g")
+	if m.log.YOffset() != 0 {
+		t.Fatal("gg scrolls to the top")
+	}
+	press(m, "ctrl+d")
+	if m.log.YOffset() == 0 {
+		t.Fatal("ctrl+d scrolls half a page")
 	}
 }
 
@@ -276,33 +294,41 @@ func TestRunFlow(t *testing.T) {
 	if m.tree.Lookup(class.Project(), "Alpha.Tests.MathTests.Extra") == nil {
 		t.Fatal("an unlisted test in the results should be added")
 	}
+	// The cursor is on MathTests, so the log aggregates the class: its
+	// counts and every failure beneath it, without stack traces.
 	v := view(m)
 	containsAll(t, v,
-		"⎯⎯ Failed Tests 1 ⎯",
-		"FAIL  Alpha.Tests › MathTests › Fails",
+		"⎯⎯ Log  Alpha.Tests › MathTests ⎯",
+		"× Alpha.Tests › MathTests (5 tests | 1 failed | 1 skipped)",
+		"FAIL  Alpha.Tests › MathTests › Fails 0.001s",
 		"Expected: 5",
 		"Actual:   4",
 		"❯ /src/Alpha.Tests/UnitTest1.cs:12",
 		"× MathTests (5 tests | 1 failed | 1 skipped)",
 		"× Fails 0.001s",
 		"Test Projects  1 failed (1)",
-		"Tests  1 failed | 3 passed | 1 skipped",
-		"│                1 not run (6)",
+		"Tests  1 failed | 3 passed | 1 skipped | 1 not run (6)",
 		"Duration  2m34s (tests 0.033s)",
 		"FAIL  Tests failed.",
 	)
 	if strings.Contains(v, "(n: 1)") {
 		t.Error("theory without failures should be folded")
 	}
-	// n selects the failed test in the tree; the log's marker follows it.
+	if strings.Contains(v, "Stack trace") {
+		t.Error("a group's log leaves the stack traces out")
+	}
+	// n selects the failed test; its own log adds the stack trace. A passed
+	// test shows its verdict.
 	press(m, "g", "g", "n")
 	if m.current().Name != "Fails" {
 		t.Fatalf("n -> %q", m.current().Name)
 	}
-	marked := markedLines(m)
-	if len(marked) != 2 || !strings.Contains(marked[0], "FAIL  Alpha.Tests › MathTests › Fails") || !strings.Contains(marked[1], "× Fails") {
+	containsAll(t, view(m), "⎯⎯ Log  Alpha.Tests › MathTests › Fails ⎯", "Stack trace", "at Alpha.Tests.MathTests.Fails()")
+	if marked := markedLines(m); len(marked) != 1 || !strings.Contains(marked[0], "× Fails") {
 		t.Fatalf("markers = %v", marked)
 	}
+	press(m, "k", "k") // past Extra, which sorts before Fails
+	containsAll(t, view(m), "⎯⎯ Log  Alpha.Tests › MathTests › Adds ⎯", "✓ Passed in 0.032s")
 	// f re-runs the failed tests only; a runs whole projects and queues.
 	press(m, "f")
 	<-f.started
@@ -322,16 +348,13 @@ func TestRunFlow(t *testing.T) {
 	if m.run != nil || m.tree.Lookup(class.Project(), "Alpha.Tests.MathTests.Fails").Status() != tree.StatusNone {
 		t.Fatal("cancelled leaves should return to StatusNone")
 	}
-	// Moving through the log's entries selects the same test in the tree;
-	// enter there re-runs it.
-	fails := m.tree.Lookup(class.Project(), "Alpha.Tests.MathTests.Fails")
-	fails.SetStatus(tree.StatusFailed)
-	m.refresh()
-	press(m, "g", "g", "ctrl+k", "j", "k")
-	if m.current() != fails {
-		t.Fatalf("tree should follow the log's selection, got %q", m.current().Name)
+	// With no failures left the class folded, and the cursor moved to it
+	// rather than jumping to the top.
+	if m.current() != class {
+		t.Fatalf("cursor should rest on the folded class, got %q", m.current().Name)
 	}
-	press(m, "enter")
+	// enter from the log pane runs the tree's selection too.
+	press(m, "l", "j", "j", "j", "ctrl+k", "enter")
 	<-f.started
 	if f.filter != "FullyQualifiedName=Alpha.Tests.MathTests.Fails" {
 		t.Fatalf("log-pane enter filter = %q", f.filter)
@@ -365,6 +388,9 @@ func TestOutputToggleAndHelp(t *testing.T) {
 	}
 	press(m, "v")
 	containsAll(t, view(m), "⎯⎯ Output  build ⎯", "Determining projects", "Build FAILED.")
+	m.logs[projA] = []string{"$ dotnet test", "  Passed X [1 ms]"}
+	m.refresh()
+	containsAll(t, view(m), "⎯⎯ Output  Alpha.Tests ⎯", "Passed X")
 	press(m, "v")
 	if strings.Contains(view(m), "Determining projects") {
 		t.Fatal("v should hide the output again")
@@ -408,14 +434,13 @@ func TestOpenInEditor(t *testing.T) {
 	if opened[len(opened)-1] != projA {
 		t.Fatalf("project open = %v", opened)
 	}
-	// From the log pane, o opens the failing line from the stack trace.
+	// From the log pane, o on a failed test opens the failing line.
 	fails := m.tree.Lookup(m.tree.Projects[0], "Alpha.Tests.MathTests.Fails")
 	fails.Result = &dotnet.Result{Outcome: dotnet.OutcomeFailed, Message: "boom", StackTrace: "   at X in /src/Alpha.Tests/UnitTest1.cs:line 12"}
 	fails.SetStatus(tree.StatusFailed)
-	m.refresh()
-	press(m, "ctrl+k", "o")
-	if lines[len(lines)-1] != 12 {
-		t.Fatalf("failure entry should open line 12, got %v", lines)
+	press(m, "j", "j", "j", "ctrl+k", "o")
+	if m.current() != fails || lines[len(lines)-1] != 12 {
+		t.Fatalf("failing line expected, got %v on %q", lines, m.current().Name)
 	}
 	// Without a listening server, nvim is launched in the terminal (an
 	// ExecProcess command), unless nvim is not installed.

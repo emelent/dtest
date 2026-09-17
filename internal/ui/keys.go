@@ -25,32 +25,20 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if key != "g" {
 		defer func() { m.pendingG = false }()
 	}
-
-	// Pane focus follows vim directions: the log is above the tree, the
-	// stats are to the right of the tree. Terminals often send ctrl+h as
-	// backspace.
 	switch key {
-	case "ctrl+k":
-		m.focus = paneLog
-	case "ctrl+j":
+	case "ctrl+j", "ctrl+k":
+		// Two panes, so either direction is the other pane.
 		if m.focus == paneLog {
 			m.focus = paneTree
-		}
-	case "ctrl+l":
-		if m.focus == paneTree {
-			m.focus = paneStats
-		}
-	case "ctrl+h", "backspace":
-		if m.focus == paneStats {
-			m.focus = paneTree
+		} else {
+			m.focus = paneLog
 		}
 	default:
 		var handled bool
 		var cmd tea.Cmd
-		switch m.focus {
-		case paneTree:
+		if m.focus == paneTree {
 			handled, cmd = m.handleTreeKey(key)
-		case paneLog:
+		} else {
 			handled, cmd = m.handleLogKey(key)
 		}
 		if !handled {
@@ -64,7 +52,8 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// handleTreeKey moves through and folds the tree.
+// handleTreeKey moves through and folds the tree; the log follows the
+// selection.
 func (m *Model) handleTreeKey(key string) (bool, tea.Cmd) {
 	n := m.current()
 	page := m.treeView.Height()
@@ -108,14 +97,6 @@ func (m *Model) handleTreeKey(key string) (bool, tea.Cmd) {
 		if n != nil && !n.IsLeaf() && m.query == "" {
 			n.Expanded = !n.Expanded
 		}
-	case "enter", "r":
-		if n != nil {
-			return true, m.enqueue([]*tree.Node{n})
-		}
-	case "n":
-		return true, m.nextFailed(true)
-	case "N":
-		return true, m.nextFailed(false)
 	case "t", "/":
 		m.filtering = true
 	case "esc":
@@ -126,45 +107,37 @@ func (m *Model) handleTreeKey(key string) (bool, tea.Cmd) {
 	return true, nil
 }
 
-// handleLogKey moves between failure entries and scrolls the log.
+// handleLogKey scrolls the log with vim motions.
 func (m *Model) handleLogKey(key string) (bool, tea.Cmd) {
 	switch key {
-	case "j", "down", "n":
-		m.moveFailure(1)
-	case "k", "up", "N":
-		m.moveFailure(-1)
+	case "j", "down", "ctrl+e":
+		m.log.ScrollDown(1)
+	case "k", "up", "ctrl+y":
+		m.log.ScrollUp(1)
 	case "g":
 		if m.pendingG {
-			m.moveFailure(-len(m.fails))
+			m.log.GotoTop()
 			m.pendingG = false
 		} else {
 			m.pendingG = true
 		}
 	case "G", "end":
-		m.moveFailure(len(m.fails))
+		m.log.GotoBottom()
 	case "ctrl+d", "pgdown":
 		m.log.HalfPageDown()
-		return true, nil
 	case "ctrl+u", "pgup":
 		m.log.HalfPageUp()
-		return true, nil
-	case "ctrl+e":
-		m.log.ScrollDown(1)
-		return true, nil
-	case "ctrl+y":
-		m.log.ScrollUp(1)
-		return true, nil
-	case "enter", "r":
-		if f := m.currentFailure(); f != nil {
-			return true, m.enqueue([]*tree.Node{f})
-		}
+	case "ctrl+f":
+		m.log.PageDown()
+	case "ctrl+b":
+		m.log.PageUp()
 	default:
 		return false, nil
 	}
 	return true, nil
 }
 
-// handleCommonKey covers actions that work from any pane.
+// handleCommonKey covers actions that work from either pane.
 func (m *Model) handleCommonKey(key string) (tea.Model, tea.Cmd) {
 	switch key {
 	case "q":
@@ -172,12 +145,20 @@ func (m *Model) handleCommonKey(key string) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	case "?":
 		m.help = true
+	case "enter", "r":
+		if n := m.current(); n != nil {
+			return m, m.enqueue([]*tree.Node{n})
+		}
 	case "a":
 		return m, m.enqueue(m.tree.Projects)
 	case "f":
 		return m, m.runFailed()
 	case "x":
 		return m, m.cancelRun()
+	case "n":
+		return m, m.nextFailed(true)
+	case "N":
+		return m, m.nextFailed(false)
 	case "o":
 		return m, m.openInEditor()
 	case "v":

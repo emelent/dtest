@@ -1,6 +1,6 @@
-// Package ui is the bubbletea front end, laid out in three panes in the
-// style of vitest: the failure log on top, the test tree bottom-left and the
-// run statistics bottom-right.
+// Package ui is the bubbletea front end, laid out in two panes in the
+// style of vitest: the log of the selected tests on top, and below it the
+// test tree with the run statistics right-aligned beside it.
 package ui
 
 import (
@@ -60,13 +60,12 @@ type activeRun struct {
 	events chan tea.Msg
 }
 
-// pane is one of the three regions of the screen.
+// pane is one of the two regions of the screen.
 type pane int
 
 const (
-	paneLog   pane = iota // top: failures and, on request, raw output
-	paneTree              // bottom-left: the test tree
-	paneStats             // bottom-right: the summary and status
+	paneLog  pane = iota // top: the selected node's results, or the raw output
+	paneTree             // bottom: the test tree, with the summary beside it
 )
 
 // Model is the root bubbletea model.
@@ -75,19 +74,15 @@ type Model struct {
 	name   string // solution or project name without extension
 	socket string
 
-	tree *tree.Tree
-	// The tree pane's rows and cursor.
-	rows   []*tree.Node
+	tree   *tree.Tree
+	rows   []*tree.Node // the tree pane's rows
 	cursor int
-	// The log pane's failure entries and the selected one.
-	fails      []*tree.Node
-	failCursor int
-	failLines  []int // first line of each entry in the log
 
 	width, height int
 	focus         pane
 	log           viewport.Model
 	logSig        string
+	logNode       *tree.Node // whose results the log shows
 	treeView      viewport.Model
 	treeSig       string
 	spin          spinner.Model
@@ -479,12 +474,12 @@ func (m *Model) Shutdown() {
 
 // Editor.
 
-// openInEditor sends the source for the selection to Neovim: the failure
-// position when the log pane is focused on an entry, the declaration of
-// the tree's node otherwise. Without a listening server nvim is opened in
-// the terminal instead.
+// openInEditor sends the source for the selected node to Neovim: from the
+// log pane the failure position of a failed test, otherwise the
+// declaration. Without a listening server nvim is opened in the terminal
+// instead.
 func (m *Model) openInEditor() tea.Cmd {
-	n := m.selected()
+	n := m.current()
 	if n == nil {
 		return nil
 	}
@@ -533,9 +528,9 @@ func (m *Model) locateNode(n *tree.Node) (dotnet.Location, bool) {
 	return loc, ok
 }
 
-// Cursors.
+// Cursor.
 
-// current is the tree node under the tree cursor.
+// current is the tree node under the cursor; the log shows its results.
 func (m *Model) current() *tree.Node {
 	if m.cursor < len(m.rows) {
 		return m.rows[m.cursor]
@@ -543,35 +538,8 @@ func (m *Model) current() *tree.Node {
 	return nil
 }
 
-// currentFailure is the failure entry selected in the log pane.
-func (m *Model) currentFailure() *tree.Node {
-	if m.failCursor < len(m.fails) {
-		return m.fails[m.failCursor]
-	}
-	return nil
-}
-
-// selected is the node the focused pane points at: a failure entry's test
-// when the log pane is focused, otherwise the tree cursor's node.
-func (m *Model) selected() *tree.Node {
-	if m.focus == paneLog {
-		return m.currentFailure()
-	}
-	return m.current()
-}
-
 func (m *Model) move(delta int) {
 	m.cursor = clamp(m.cursor+delta, len(m.rows))
-	m.syncFailureToTree()
-}
-
-// moveFailure steps through the failure entries and points the tree at the
-// same test, so both panes agree.
-func (m *Model) moveFailure(delta int) {
-	m.failCursor = clamp(m.failCursor+delta, len(m.fails))
-	if f := m.currentFailure(); f != nil {
-		m.selectNode(f)
-	}
 }
 
 func clamp(i, n int) int {
@@ -582,18 +550,6 @@ func clamp(i, n int) int {
 		i = 0
 	}
 	return i
-}
-
-// syncFailureToTree points the log pane at the entry of the failed test
-// under the tree cursor, so the two panes agree.
-func (m *Model) syncFailureToTree() {
-	n := m.current()
-	for i, f := range m.fails {
-		if f == n {
-			m.failCursor = i
-			return
-		}
-	}
 }
 
 // selectNode moves the tree cursor to n, expanding its ancestors.
@@ -608,7 +564,6 @@ func (m *Model) selectNode(n *tree.Node) {
 			break
 		}
 	}
-	m.syncFailureToTree()
 	m.refresh()
 }
 

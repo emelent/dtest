@@ -8,8 +8,10 @@ while the screen updates live.
 
 ```
   DTEST  Shop
-⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
-❯  FAIL  Shop.Api.Tests › Middleware.RateLimitMiddlewareTests › OverLimit_Returns429
+⎯⎯ Log  Shop.Api.Tests ⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
+  × Shop.Api.Tests (16 tests | 1 failed | 1 skipped) 1.1s
+
+   FAIL  Shop.Api.Tests › Middleware.RateLimitMiddlewareTests › OverLimit_Returns429 0.001s
 Assert.Equal() Failure: Values differ
 Expected: 429
 Actual:   428
@@ -17,31 +19,32 @@ Actual:   428
 
 
 
-⎯⎯ Tests ⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯│⎯⎯ Summary ⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
-❯ × Shop.Api.Tests (16 tests | 1 failed | 1 skipped) 1.1s  │ Test Projects  1 failed | 1 passed (2)
-    ✓ Controllers.OrdersControllerTests (3 tests) 0.305s   │         Tests  1 failed | 46 passed | 2 skipped (49)
-    ✓ Integration.CheckoutFlowTests (2 tests | 1 skipped)  │      Start at  21:21:48
-    × Middleware.RateLimitMiddlewareTests (2 tests | 1 fai…│      Duration  4.0s (tests 2.4s)
-      × OverLimit_Returns429 0.001s                        │
-      ✓ UnderLimit_Passes 0.002s                           │  FAIL  Tests failed.
-  ✓ Shop.Core.Tests (33 tests | 1 skipped) 1.2s            │       press ? to show help, press q to quit
+⎯⎯ Tests ⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
+❯ × Shop.Api.Tests (16 tests | 1 failed | 1 skipped) 1.1s           Test Projects  1 failed | 1 passed (2)
+    ✓ Controllers.OrdersControllerTests (3 tests) 0.305s                    Tests  1 failed | 46 passed | 2 skipped (49)
+    ✓ Integration.CheckoutFlowTests (2 tests | 1 skipped) 0.803s         Start at  21:36:37
+    × Middleware.RateLimitMiddlewareTests (2 tests | 1 failed) 0.002s    Duration  4.0s (tests 2.3s)
+      × OverLimit_Returns429 0.001s
+      ✓ UnderLimit_Passes 0.001s                                        FAIL  Tests failed.
+  ✓ Shop.Core.Tests (33 tests | 1 skipped) 1.2s                              press ? to show help, press q to quit
 ```
 
 ## Layout
 
-Three panes, switched with vim directions on ctrl: `ctrl+k` up to the log,
-`ctrl+j` down to the tree, `ctrl+l` right to the summary, `ctrl+h` back left.
+Two panes; `ctrl+j` and `ctrl+k` switch between them, wrapping around.
 
-- **Log** (top, about 70% of the height): the minimal test log. Each failed
-  test with its message (expected values green, actual values red) and the
-  source location from its stack trace, plus any build errors. `v` swaps in
-  the raw `dotnet` output, coloured by kind.
-- **Tests** (bottom left): the tree of projects, classes, methods and theory
-  rows, with vitest-style counts and durations on every group. After a run,
+- **Log** (top, about 70% of the height) shows the results of whatever the
+  tree selects. For a test: its verdict, message (expected values green,
+  actual values red), failing location, stack trace and captured output.
+  For a project, class or theory: its counts and every failure beneath it.
+  Build errors show first. With the log focused, `j`/`k`, `gg`/`G`,
+  `ctrl+d`/`ctrl+u` scroll it. `v` swaps in the raw `dotnet` output of the
+  selected project, coloured by kind.
+- **Tests** (bottom) is the tree of projects, classes, methods and theory
+  rows, with vitest-style counts and durations on every group, and vitest's
+  summary block (projects, tests, start time, duration, then the `RUN` /
+  `PASS` / `FAIL` state and key hint) right-aligned beside it. After a run,
   passing classes fold to one line and failing ones open.
-- **Summary** (bottom right): vitest's closing block of projects, tests,
-  start time and duration, then the `RUN` / `PASS` / `FAIL` state and the
-  key hint.
 
 ## Features
 
@@ -91,12 +94,10 @@ Press `?` in the app for this list.
 
 | Key | Action |
 | --- | --- |
-| `ctrl+k` / `ctrl+j` | Focus the log above / the tree below |
-| `ctrl+h` / `ctrl+l` | Focus the tree / the summary |
-| `j` / `k`, `↓` / `↑` | Move; in the log, between failures (the tree follows) |
-| `gg` / `G` | First / last entry |
+| `ctrl+j` / `ctrl+k` | Switch between the log and the tree |
+| `j` / `k`, `↓` / `↑` | Move through the tree, or scroll the log |
+| `gg` / `G` | Top / bottom |
 | `ctrl+d` / `ctrl+u` | Half page |
-| `ctrl+e` / `ctrl+y` | Scroll the log without moving its selection |
 | `l` / `h` | Expand / collapse a project, class or theory (`h` on a collapsed node selects its parent) |
 | `space` | Toggle a fold |
 | `enter`, `r` | Run the selected project, class or test |
@@ -104,9 +105,9 @@ Press `?` in the app for this list.
 | `f` | Re-run only the failed tests |
 | `x` | Cancel the running tests and drop the queue |
 | `n` / `N` | Next / previous failed test |
-| `o` | Open the selection in Neovim; from the log pane, the failing line |
+| `o` | Open the selected test in Neovim; from the log pane, its failing line |
 | `t`, `/` | Filter the tree by test or project name; `enter` keeps the filter, `esc` clears it |
-| `v` | Show or hide the raw dotnet output in the log pane |
+| `v` | Show the raw dotnet output of the selected project instead of its results |
 | `ctrl+r` | Rebuild and list the tests again |
 | `q`, `ctrl+c` | Quit |
 
