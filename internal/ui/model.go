@@ -95,6 +95,7 @@ type Model struct {
 	statusID  int
 
 	help      bool
+	fullLog   bool // show every line of dotnet output instead of results only
 	searching bool
 	query     string
 	pendingG  bool

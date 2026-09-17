@@ -98,9 +98,9 @@ func (m *Model) renderStatus() string {
 	if m.searching {
 		return styleBar.Render(fit(" /"+m.query+"▏", m.width))
 	}
-	hints := []string{"j/k move", "h/l fold", "r run", "R all", "e rerun failed", "m mark", "o nvim", "f/s fail/skip", "/ find", "tab log", "? help", "q quit"}
+	hints := []string{"j/k move", "h/l fold", "r run", "R all", "e rerun failed", "m mark", "o nvim", "f/s fail/skip", "/ find", "v full log", "tab log", "? help", "q quit"}
 	if m.focus == paneLog {
-		hints = []string{"j/k scroll", "g/G top/bottom", "ctrl+d/u page", "h back", "r run", "x cancel", "? help", "q quit"}
+		hints = []string{"j/k scroll", "g/G top/bottom", "ctrl+d/u page", "v full log", "h back", "r run", "x cancel", "? help", "q quit"}
 	}
 	var b strings.Builder
 	for _, h := range hints {
@@ -230,13 +230,17 @@ func (m *Model) statusIcon(s tree.Status) string {
 // logTitle names what the log pane shows.
 func (m *Model) logTitle() string {
 	n := m.current()
+	mode := " (results)"
+	if m.fullLog {
+		mode = " (full)"
+	}
 	switch {
 	case n != nil && n.IsLeaf():
 		return "Test: " + n.Name
 	case n != nil && m.logs[n.Project().Path] != nil:
-		return "Log: " + n.Project().Name
+		return "Log: " + n.Project().Name + mode
 	}
-	return "Log: build"
+	return "Log: build" + mode
 }
 
 // refreshLog points the viewport at the content for the cursor: a test's
@@ -276,12 +280,55 @@ func (m *Model) logContent() (string, []string) {
 	if n != nil && n.IsLeaf() {
 		return "test:" + n.Project().Path + "/" + n.FQN, m.renderDetail(n)
 	}
+	mode := "results:"
+	if m.fullLog {
+		mode = "full:"
+	}
 	if n != nil {
 		if lines, ok := m.logs[n.Project().Path]; ok {
-			return "log:" + n.Project().Path, colorLog(lines)
+			return "log:" + mode + n.Project().Path, m.presentLog(lines)
 		}
 	}
-	return "log:" + buildLogKey, colorLog(m.logs[buildLogKey])
+	return "log:" + mode + buildLogKey, m.presentLog(m.logs[buildLogKey])
+}
+
+// presentLog prepares raw output for the pane: filtered to results unless
+// the full log is on, then coloured.
+func (m *Model) presentLog(lines []string) []string {
+	if !m.fullLog {
+		lines = resultLines(lines)
+	}
+	return colorLog(lines)
+}
+
+// resultLines keeps what matters from dotnet output: the command, each
+// test's result line and the whole block after a failure (message and
+// stack trace, up to the next blank line), the run summary and build errors
+// or warnings. Runner chatter, restore and build progress are dropped.
+func resultLines(lines []string) []string {
+	var out []string
+	inFailure := false
+	for _, line := range lines {
+		trimmed := strings.TrimSpace(line)
+		switch {
+		case inFailure && trimmed == "":
+			inFailure = false
+		case inFailure:
+			out = append(out, line)
+		case strings.HasPrefix(trimmed, "Failed "):
+			inFailure = true
+			out = append(out, line)
+		case strings.HasPrefix(line, "$ "),
+			strings.HasPrefix(trimmed, "Passed "), strings.HasPrefix(trimmed, "Skipped "),
+			strings.HasPrefix(trimmed, "Test Run "), strings.HasPrefix(trimmed, "Total tests:"),
+			strings.HasPrefix(trimmed, "Passed:"), strings.HasPrefix(trimmed, "Failed:"), strings.HasPrefix(trimmed, "Skipped:"),
+			strings.Contains(line, ": error "), strings.Contains(line, ": warning "),
+			strings.Contains(line, "Build FAILED"), strings.Contains(line, "Build succeeded"),
+			strings.Contains(line, "No test is available"), strings.HasPrefix(trimmed, "dotnet test failed"):
+			out = append(out, line)
+		}
+	}
+	return out
 }
 
 // Log line classes, matched in order; the first match styles the line.
@@ -383,6 +430,7 @@ var helpRows = []helpRow{
 	{"s / S", "next / previous skipped test"},
 	{"/", "filter the tree by name; enter keeps it, esc clears it"},
 	{"o", "open the test's source in Neovim (see below)"},
+	{"v", "log pane: results only (default) or the full dotnet output"},
 	{"tab", "focus the log pane; h, esc or tab come back"},
 	{"ctrl+r", "rebuild and list tests again"},
 	{"?", "this help"},

@@ -296,6 +296,75 @@ func TestRerunFailedWithNothingFailed(t *testing.T) {
 	}
 }
 
+func TestResultLines(t *testing.T) {
+	raw := []string{
+		"$ dotnet test x",
+		"  Determining projects to restore...",
+		"Test run for /x/Alpha.Tests.dll (.NETCoreApp,Version=v10.0)",
+		"[xUnit.net 00:00:00.00] xUnit.net VSTest Adapter",
+		"some console output from a test",
+		"  Passed Ns.C.M [1 ms]",
+		"  Failed Ns.C.N [1 ms]",
+		"  Error Message:",
+		"   Assert.Equal() Failure",
+		"Expected: 5",
+		"  Stack Trace:",
+		"     at Ns.C.N() in /x.cs:line 3",
+		"",
+		"  Skipped Ns.C.O [< 1 ms]",
+		"[xUnit.net 00:00:01.56]   Finished:    Alpha.Tests",
+		"",
+		"Test Run Failed.",
+		"Total tests: 3",
+		"     Passed: 1",
+		"     Failed: 1",
+		"    Skipped: 1",
+		" Total time: 1,7538 Seconds",
+		"Results File: /tmp/results.trx",
+		"Program.cs(3,5): error CS1002: ; expected",
+	}
+	got := resultLines(raw)
+	want := []string{
+		"$ dotnet test x",
+		"  Passed Ns.C.M [1 ms]",
+		"  Failed Ns.C.N [1 ms]",
+		"  Error Message:",
+		"   Assert.Equal() Failure",
+		"Expected: 5",
+		"  Stack Trace:",
+		"     at Ns.C.N() in /x.cs:line 3",
+		"  Skipped Ns.C.O [< 1 ms]",
+		"Test Run Failed.",
+		"Total tests: 3",
+		"     Passed: 1",
+		"     Failed: 1",
+		"    Skipped: 1",
+		"Program.cs(3,5): error CS1002: ; expected",
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Fatalf("resultLines =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
+func TestLogToggle(t *testing.T) {
+	m := newTestModel(t)
+	m.logs[buildLogKey] = []string{"$ dotnet build", "  Determining projects to restore...", "Build succeeded."}
+	m.refreshLog()
+	v := view(m)
+	if !strings.Contains(v, "Log: build (results)") || strings.Contains(v, "Determining projects") || !strings.Contains(v, "Build succeeded.") {
+		t.Fatalf("results view:\n%s", v)
+	}
+	press(m, "v")
+	v = view(m)
+	if !strings.Contains(v, "Log: build (full)") || !strings.Contains(v, "Determining projects") {
+		t.Fatalf("full view:\n%s", v)
+	}
+	press(m, "tab", "v") // works from the log pane too
+	if m.fullLog || !strings.Contains(view(m), "(results)") {
+		t.Fatal("v should toggle back from the log pane")
+	}
+}
+
 func TestColorLog(t *testing.T) {
 	lines := []string{
 		"$ dotnet test x",
@@ -429,7 +498,7 @@ func TestLogPaneAndHelp(t *testing.T) {
 	m := newTestModel(t)
 	m.logs[buildLogKey] = []string{"$ dotnet build", "Build succeeded."}
 	m.refreshLog()
-	if v := view(m); !strings.Contains(v, "Log: build") || !strings.Contains(v, "Build succeeded.") {
+	if v := view(m); !strings.Contains(v, "Log: build (results)") || !strings.Contains(v, "Build succeeded.") {
 		t.Fatalf("build log should show:\n%s", v)
 	}
 	press(m, "tab")

@@ -176,6 +176,9 @@ func (m *Model) handleCommonKey(key string) (tea.Model, tea.Cmd) {
 		return m, m.nextWithStatus(tree.StatusSkipped, false)
 	case "e":
 		return m, m.rerunFailed()
+	case "v":
+		m.fullLog = !m.fullLog
+		m.refreshLog()
 	case "u":
 		m.tree.ClearMarks()
 	case "esc":
