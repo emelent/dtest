@@ -489,10 +489,9 @@ func (m *Model) Shutdown() {
 
 // Editor.
 
-// openInEditor sends the source for the selected node to Neovim: from the
-// log pane the failure position of a failed test, otherwise the
-// declaration. Without a listening server nvim is opened in the terminal
-// instead.
+// openInEditor sends the source for the selected node to Neovim: the
+// offending line of a failed test, otherwise the declaration. Without a
+// listening server nvim is opened in the terminal instead.
 func (m *Model) openInEditor() tea.Cmd {
 	n := m.current()
 	if n == nil {
@@ -500,7 +499,7 @@ func (m *Model) openInEditor() tea.Cmd {
 	}
 	var loc dotnet.Location
 	ok := false
-	if m.focus == paneLog && n.Result != nil {
+	if n.Status() == tree.StatusFailed && n.Result != nil {
 		loc, ok = n.Result.FailureLocation()
 	}
 	if !ok {

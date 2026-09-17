@@ -52,8 +52,8 @@ ctrl+j/k for their own pane movement.
 ## Features
 
 - Run the selected project, class, method or test; `a` runs everything, `f` re-runs only what failed; runs queue up, one `dotnet test` per project
-- Live status while tests run: a spinner on the running tests, ✓ × ↓ as each result comes in; projects, classes and theories carry a fold arrow (▾ / ▸) in the colour of their status, with counts and durations rolled up
-- Open the selected test in Neovim, either a running instance (via the socket in `$nvim_sock`) or one launched in place; from the log pane, the failing line
+- Live status while tests run: the project row spins and everything running beneath it turns cyan; ✓ × ↓ arrive as each result comes in; projects, classes and theories carry a fold arrow (▾ / ▸) in the colour of their status, with counts and durations rolled up
+- Open the selected test in Neovim, either a running instance (via the socket in `$nvim_sock`) or one launched in place; a failed test opens at the failing line
 - Filter the tree by test or project name as you type
 
 ## Requirements
@@ -108,7 +108,7 @@ Press `?` in the app for this list.
 | `f` | Re-run only the failed tests |
 | `x` | Cancel the running tests and drop the queue |
 | `n` / `N` | Next / previous failed test |
-| `o` | Open the selected test in Neovim; from the log pane, its failing line |
+| `o` | Open the selected test in Neovim; a failed test opens at the failing line |
 | `t`, `/` | Filter the tree by test or project name; `enter` keeps the filter, `esc` clears it |
 | `v` | Show the raw dotnet output of the selected project instead of its results |
 | `ctrl+r` | Rebuild and list the tests again |
@@ -126,8 +126,9 @@ summary's Duration is the wall-clock time of the whole batch of runs.
 
 ## Neovim
 
-`o` looks for the class and method declaration in the project's source files
-(falling back to the failure position in the stack trace) and sends it to
+`o` opens a failed test at the failing line taken from its stack trace, and
+any other node at its declaration, found by scanning the project's source
+files. Either way the location is sent to
 the Neovim listening on the socket named by the `nvim_sock` environment
 variable (`NVIM_SOCK` works too) or by `--nvim-socket`. Start Neovim
 listening on the socket, as in [ghpr](../ghpr):

@@ -370,11 +370,7 @@ func (m *Model) renderNode(n *tree.Node, selected bool) string {
 	if selected {
 		marker = m.marker(m.focus == paneTree)
 	}
-	icon := m.statusIcon(status)
-	if !n.IsLeaf() {
-		icon = m.groupIcon(n)
-	}
-	line := marker + " " + strings.Repeat("  ", n.Depth()) + icon + " " + name
+	line := marker + " " + strings.Repeat("  ", n.Depth()) + m.treeIcon(n) + " " + name
 	if len(tail) > 0 {
 		line += " " + strings.Join(tail, " ")
 	}
@@ -400,25 +396,42 @@ func (m *Model) renderCounts(c tree.Counts) string {
 	return styleDim.Render("(") + strings.Join(parts, sep) + styleDim.Render(")")
 }
 
-// groupIcon marks a project, class or theory with a fold arrow in the
-// colour of its status, so groups read differently from tests. While it
-// runs the spinner takes over.
-func (m *Model) groupIcon(n *tree.Node) string {
-	arrow := iconClosed
-	if n.Expanded || m.query != "" {
-		arrow = iconOpen
+// treeIcon is a node's glyph in the tree: a fold arrow for a project, class
+// or theory, a status glyph for a test, each in the colour of its status.
+// While tests run, only the top-most running node (the project, since
+// running rolls up) spins; everything running beneath it is simply drawn
+// in the running colour, so the tree does not flicker all over.
+func (m *Model) treeIcon(n *tree.Node) string {
+	status := n.Status()
+	if status == tree.StatusRunning {
+		if n.Parent == nil || n.Parent.Status() != tree.StatusRunning {
+			return m.spin.View()
+		}
+		if n.IsLeaf() {
+			return styleRunning.Render(iconNone)
+		}
+		return styleRunning.Render(m.arrow(n))
 	}
-	switch n.Status() {
-	case tree.StatusRunning:
-		return m.spin.View()
+	if n.IsLeaf() {
+		return m.statusIcon(status)
+	}
+	switch status {
 	case tree.StatusPassed:
-		return stylePassed.Render(arrow)
+		return stylePassed.Render(m.arrow(n))
 	case tree.StatusFailed:
-		return styleFailed.Bold(true).Render(arrow)
+		return styleFailed.Bold(true).Render(m.arrow(n))
 	case tree.StatusSkipped:
-		return styleSkipped.Render(arrow)
+		return styleSkipped.Render(m.arrow(n))
 	}
-	return styleDim.Render(arrow)
+	return styleDim.Render(m.arrow(n))
+}
+
+// arrow is the fold glyph for a group: open when expanded or filtered.
+func (m *Model) arrow(n *tree.Node) string {
+	if n.Expanded || m.query != "" {
+		return iconOpen
+	}
+	return iconClosed
 }
 
 func (m *Model) statusIcon(s tree.Status) string {
@@ -580,7 +593,7 @@ var helpRows = []helpRow{
 	{"f", "to rerun only the failed tests"},
 	{"x", "to cancel the running tests"},
 	{"n / N", "to jump to the next / previous failure"},
-	{"o", "to open the selected test in Neovim (from the log: its failing line)"},
+	{"o", "to open the selected test in Neovim (a failed test opens at the failing line)"},
 	{"t or /", "to filter the tree by test or project name (enter keeps it, esc clears it)"},
 	{"v", "to show the raw dotnet output of the selected project instead"},
 	{"ctrl+r", "to rebuild and list the tests again"},

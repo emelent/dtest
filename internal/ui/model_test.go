@@ -310,6 +310,20 @@ func TestRunFlow(t *testing.T) {
 	}
 	v := view(m)
 	containsAll(t, v, "(5 tests | 4 running)", "19:10:48", "Tests  5", "Failed  0", "Passed  0")
+	// Only the project row spins; the running class beneath keeps its arrow.
+	_, bottom, _ := strings.Cut(v, "⎯⎯ Tests")
+	spinners := 0
+	for _, l := range strings.Split(bottom, "\n") {
+		if strings.ContainsAny(l, "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏") {
+			spinners++
+			if !strings.Contains(l, "Alpha.Tests (5 tests") {
+				t.Errorf("only the project row should spin: %q", l)
+			}
+		}
+	}
+	if spinners != 1 || !strings.Contains(bottom, "▸ MathTests (4 tests | 4 running)") {
+		t.Errorf("spinners = %d; class should show its arrow:\n%s", spinners, bottom)
+	}
 	for _, l := range strings.Split(v, "\n") {
 		summary := strings.Contains(l, "Test Projects  ") || strings.Contains(l, "   Tests  ")
 		if strings.Contains(v, "RUN") || strings.Contains(v, "Running") || (summary && strings.Contains(l, "running")) {
@@ -522,13 +536,23 @@ func TestOpenInEditor(t *testing.T) {
 	if opened[len(opened)-1] != projA {
 		t.Fatalf("project open = %v", opened)
 	}
-	// From the log pane, o on a failed test opens the failing line.
+	// o on a failed test opens the failing line from the stack trace, from
+	// either pane; once it passes again, the declaration.
 	fails := m.tree.Lookup(m.tree.Projects[0], "Alpha.Tests.MathTests.Fails")
 	fails.Result = &dotnet.Result{Outcome: dotnet.OutcomeFailed, Message: "boom", StackTrace: "   at X in /src/Alpha.Tests/UnitTest1.cs:line 12"}
 	fails.SetStatus(tree.StatusFailed)
-	press(m, "j", "j", "j", "ctrl+k", "o")
+	press(m, "j", "j", "j", "o")
 	if m.current() != fails || lines[len(lines)-1] != 12 {
-		t.Fatalf("failing line expected, got %v on %q", lines, m.current().Name)
+		t.Fatalf("failing line expected from the tree, got %v on %q", lines, m.current().Name)
+	}
+	press(m, "ctrl+k", "o")
+	if lines[len(lines)-1] != 12 {
+		t.Fatalf("failing line expected from the log, got %v", lines)
+	}
+	fails.SetStatus(tree.StatusPassed)
+	press(m, "o")
+	if lines[len(lines)-1] != 7 {
+		t.Fatalf("a passing test opens at its declaration, got %v", lines)
 	}
 	// Without a listening server, nvim is launched in the terminal (an
 	// ExecProcess command), unless nvim is not installed.
