@@ -27,6 +27,15 @@ func TestParseList(t *testing.T) {
 	}
 }
 
+func TestReadLines(t *testing.T) {
+	long := strings.Repeat("x", 5*1024*1024)
+	var got []string
+	readLines(strings.NewReader("a\r\n"+long+"\nlast"), func(l string) { got = append(got, l) })
+	if len(got) != 3 || got[0] != "a" || len(got[1]) != len(long) || got[2] != "last" {
+		t.Fatalf("readLines: %d lines, lens %d %d", len(got), len(got[0]), len(got[1]))
+	}
+}
+
 func TestParseResultLine(t *testing.T) {
 	cases := []struct {
 		line    string

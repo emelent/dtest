@@ -20,13 +20,13 @@ Actual:   428
 
 
 ⎯⎯ Tests ⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
-❯ × Shop.Api.Tests (16 tests | 1 failed | 1 skipped) 1.1s           Test Projects  1 failed | 1 passed (2)
-    ✓ Controllers.OrdersControllerTests (3 tests) 0.305s                    Tests  1 failed | 46 passed | 2 skipped (49)
-    ✓ Integration.CheckoutFlowTests (2 tests | 1 skipped) 0.803s         Start at  21:36:37
-    × Middleware.RateLimitMiddlewareTests (2 tests | 1 failed) 0.002s    Duration  4.0s (tests 2.3s)
+❯ ▾ Shop.Api.Tests (16 tests | 1 failed | 1 skipped) 1.1s           Test Projects  1 failed | 1 passed (2)
+    ▸ Controllers.OrdersControllerTests (3 tests) 0.305s                    Tests  1 failed | 46 passed | 2 skipped (49)
+    ▸ Integration.CheckoutFlowTests (2 tests | 1 skipped) 0.803s         Start at  21:36:37
+    ▾ Middleware.RateLimitMiddlewareTests (2 tests | 1 failed) 0.002s    Duration  4.0s (tests 2.3s)
       × OverLimit_Returns429 0.001s
       ✓ UnderLimit_Passes 0.001s                                        FAIL  Tests failed.
-  ✓ Shop.Core.Tests (33 tests | 1 skipped) 1.2s                              press ? to show help, press q to quit
+  ▾ Shop.Core.Tests (33 tests | 1 skipped) 1.2s                              press ? to show help, press q to quit
 ```
 
 ## Layout
@@ -52,7 +52,7 @@ ctrl+j/k for their own pane movement.
 ## Features
 
 - Run the selected project, class, method or test; `a` runs everything, `f` re-runs only what failed; runs queue up, one `dotnet test` per project
-- Live status while tests run: a spinner on the running tests, ✓ × ↓ as each result comes in, counts and durations rolled up to every parent
+- Live status while tests run: a spinner on the running tests, ✓ × ↓ as each result comes in; projects, classes and theories carry a fold arrow (▾ / ▸) in the colour of their status, with counts and durations rolled up
 - Open the selected test in Neovim, either a running instance (via the socket in `$nvim_sock`) or one launched in place; from the log pane, the failing line
 - Filter the tree by test or project name as you type
 

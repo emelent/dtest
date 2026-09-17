@@ -191,20 +191,32 @@ func (m *Model) startBuild() tea.Cmd {
 	return waitMsg(ch)
 }
 
-// startListing lists the tests of every project in parallel.
+// listWorkers caps how many `dotnet test --list-tests` run at once; each is
+// a full dotnet process, and a solution can have dozens of test projects.
+const listWorkers = 4
+
+// startListing lists the tests of every project, a few at a time.
 func (m *Model) startListing() tea.Cmd {
 	opts := m.cfg.Options
 	opts.NoBuild = true // just built, or the user asked for no builds
+	sem := make(chan struct{}, listWorkers)
 	var cmds []tea.Cmd
 	for _, p := range m.tree.Projects {
 		p := p
 		m.loading++
 		cmds = append(cmds, func() tea.Msg {
+			sem <- struct{}{}
+			defer func() { <-sem }()
 			names, err := listTests(context.Background(), p.Path, opts)
 			return listMsg{project: p, names: names, err: err}
 		})
 	}
 	return tea.Batch(cmds...)
+}
+
+// busy reports whether dotnet is doing something on our behalf.
+func (m *Model) busy() bool {
+	return m.building || m.loading > 0 || m.run != nil
 }
 
 // reload rebuilds (unless --no-build) and lists the tests again.
@@ -230,6 +242,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case spinner.TickMsg:
 		var cmd tea.Cmd
 		m.spin, cmd = m.spin.Update(msg)
+		// While dotnet is busy the tick drives the redraw: spinners and the
+		// duration advance, and output lines that arrived since the last
+		// tick are drawn in one go instead of one rebuild per line.
+		if m.busy() {
+			m.refresh()
+		}
 		return m, cmd
 
 	case projectsMsg:
@@ -248,7 +266,6 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case buildLineMsg:
 		m.logs[buildLogKey] = append(m.logs[buildLogKey], msg.text)
-		m.refresh()
 		return m, waitMsg(m.events)
 
 	case buildDoneMsg:
@@ -377,12 +394,10 @@ func (m *Model) handleRunEvent(msg runEventMsg) tea.Cmd {
 	switch e := msg.event.(type) {
 	case dotnet.LineEvent:
 		m.logs[key] = append(m.logs[key], e.Text)
-		m.refresh()
-		return waitMsg(m.run.events)
+		return waitMsg(m.run.events) // drawn on the next spinner tick
 
 	case dotnet.ResultEvent:
 		m.apply(msg.project, e.Result)
-		m.refresh()
 		return waitMsg(m.run.events)
 
 	case dotnet.DoneEvent:

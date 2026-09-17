@@ -33,8 +33,10 @@ func (m *Model) layout() geometry {
 	g := geometry{}
 	g.logH = max(1, body*7/10)
 	g.bottomH = max(1, body-g.logH)
+	// The block is as wide as its summary lines; the state line on top is
+	// truncated to that, so a long "Running …" label cannot shift the block.
 	stats := m.statsLines()
-	for _, l := range stats {
+	for _, l := range stats[1:] {
 		g.statsW = max(g.statsW, ansi.StringWidth(l))
 	}
 	g.treeW = m.width - g.statsW - 2
@@ -238,7 +240,7 @@ func (m *Model) renderNodeLog(n *tree.Node) []string {
 			lines = append(lines, m.renderFailure(l, false)...)
 		}
 	case c.Running > 0:
-		lines = append(lines, "", "  "+m.spin.View()+fmt.Sprintf(" %d running…", c.Running))
+		// The tally above already says how many are running.
 	case c.Passed+c.Skipped > 0:
 		lines = append(lines, "", "  "+stylePassed.Render(iconPassed+" No failed tests."))
 	default:
@@ -253,7 +255,7 @@ func (m *Model) renderLeafLog(n *tree.Node) []string {
 	head := "  " + m.statusIcon(n.Status()) + " " + styleBold.Render(breadcrumb(n))
 	switch {
 	case n.Status() == tree.StatusRunning:
-		return []string{head, "", "  " + m.spin.View() + " Running…"}
+		return []string{head} // the spinner in the header says it all
 	case r == nil:
 		return []string{head, "", styleDim.Render("  Not run yet. Press enter to run it, o to open it in nvim.")}
 	case n.Status() == tree.StatusFailed:
@@ -339,7 +341,7 @@ func (m *Model) renderBottom(g geometry) string {
 	}
 	stats = stats[len(stats)-g.bottomH:]
 	for i, l := range stats {
-		stats[i] = fit(l, g.statsW)
+		stats[i] = fit(ansi.Truncate(l, g.statsW, "…"), g.statsW)
 	}
 	return lipgloss.JoinHorizontal(lipgloss.Top, tree, "  ", strings.Join(stats, "\n"))
 }
@@ -368,7 +370,11 @@ func (m *Model) renderNode(n *tree.Node, selected bool) string {
 	if selected {
 		marker = m.marker(m.focus == paneTree)
 	}
-	line := marker + " " + strings.Repeat("  ", n.Depth()) + m.statusIcon(status) + " " + name
+	icon := m.statusIcon(status)
+	if !n.IsLeaf() {
+		icon = m.groupIcon(n)
+	}
+	line := marker + " " + strings.Repeat("  ", n.Depth()) + icon + " " + name
 	if len(tail) > 0 {
 		line += " " + strings.Join(tail, " ")
 	}
@@ -392,6 +398,27 @@ func (m *Model) renderCounts(c tree.Counts) string {
 	}
 	sep := styleDim.Render(" | ")
 	return styleDim.Render("(") + strings.Join(parts, sep) + styleDim.Render(")")
+}
+
+// groupIcon marks a project, class or theory with a fold arrow in the
+// colour of its status, so groups read differently from tests. While it
+// runs the spinner takes over.
+func (m *Model) groupIcon(n *tree.Node) string {
+	arrow := iconClosed
+	if n.Expanded || m.query != "" {
+		arrow = iconOpen
+	}
+	switch n.Status() {
+	case tree.StatusRunning:
+		return m.spin.View()
+	case tree.StatusPassed:
+		return stylePassed.Render(arrow)
+	case tree.StatusFailed:
+		return styleFailed.Bold(true).Render(arrow)
+	case tree.StatusSkipped:
+		return styleSkipped.Render(arrow)
+	}
+	return styleDim.Render(arrow)
 }
 
 func (m *Model) statusIcon(s tree.Status) string {
@@ -430,28 +457,15 @@ func displayPath(path string) string {
 // Header and stats.
 
 func (m *Model) renderHeader() string {
-	left := badgeInfo.Render("DTEST") + " " + styleBold.Render(m.name)
-	right := ""
-	switch {
-	case m.building:
-		right = badgeRun.Render("RUN") + " building"
-	case m.loading > 0:
-		right = badgeRun.Render("RUN") + " listing tests"
-	case m.run != nil:
-		right = badgeRun.Render("RUN") + " " + m.run.req.label
-		if len(m.queue) > 0 {
-			right += styleDim.Render(fmt.Sprintf("  +%d queued", len(m.queue)))
-		}
-	}
-	right = ansi.Truncate(right, max(10, m.width/2), "…")
-	return fitLine(" "+left, right+" ", m.width)
+	return fit(" "+badgeInfo.Render("DTEST")+" "+styleBold.Render(m.name), m.width)
 }
 
-// statsLines is vitest's summary block, then the state badge and the key
-// hint; it is right-aligned beside the tree.
+// statsLines is the state line (always present, so the block below never
+// moves), then vitest's summary block, then the key hint; it is
+// right-aligned beside the tree.
 func (m *Model) statsLines() []string {
 	width := max(40, m.width-32) // leave the tree at least 30 columns
-	var lines []string
+	lines := []string{m.stateLine(), ""}
 	if !m.batchStart.IsZero() {
 		var pc tree.Counts
 		for _, p := range m.tree.Projects {
@@ -479,13 +493,12 @@ func (m *Model) statsLines() []string {
 		lines = append(lines, wrapSummary("Tests", summaryParts(m.tree.Counts()), width)...)
 		lines = append(lines,
 			summaryLabel("Start at")+m.batchStart.Format("15:04:05"),
-			summaryLabel("Duration")+formatDuration(end.Sub(m.batchStart))+styleDim.Render(fmt.Sprintf(" (tests %s)", formatDuration(tests))),
-			"")
+			summaryLabel("Duration")+formatDuration(end.Sub(m.batchStart))+styleDim.Render(fmt.Sprintf(" (tests %s)", formatDuration(tests))))
 	} else {
 		c := m.tree.Counts()
-		lines = append(lines, summaryLabel("Tests")+styleDim.Render(fmt.Sprintf("(%d)", c.Total)), "")
+		lines = append(lines, summaryLabel("Tests")+styleDim.Render(fmt.Sprintf("(%d)", c.Total)))
 	}
-	return append(lines, m.renderStatusLines()...)
+	return append(lines, "", strings.Repeat(" ", 7)+styleDim.Render("press ? to show help, press q to quit"))
 }
 
 // summaryLabelW is the width of the summary's label column: the longest
@@ -523,12 +536,10 @@ func wrapSummary(label string, parts []string, width int) []string {
 
 // summaryParts is vitest's "1 failed | 1 passed | 2 skipped (4)" as its
 // pieces, listing only the non-zero groups, each bold in its colour, with
-// the total attached to the last one.
+// the total attached to the last one. Running tests count as not run, so
+// the line does not keep changing while a run is in progress.
 func summaryParts(c tree.Counts) []string {
 	var parts []string
-	if c.Running > 0 {
-		parts = append(parts, styleRunning.Bold(true).Render(fmt.Sprintf("%d running", c.Running)))
-	}
 	if c.Failed > 0 {
 		parts = append(parts, styleFailed.Bold(true).Render(fmt.Sprintf("%d failed", c.Failed)))
 	}
@@ -538,7 +549,7 @@ func summaryParts(c tree.Counts) []string {
 	if c.Skipped > 0 {
 		parts = append(parts, styleSkipped.Bold(true).Render(fmt.Sprintf("%d skipped", c.Skipped)))
 	}
-	if rest := c.Total - c.Running - c.Failed - c.Passed - c.Skipped; rest > 0 {
+	if rest := c.Total - c.Failed - c.Passed - c.Skipped; rest > 0 {
 		parts = append(parts, styleDim.Render(fmt.Sprintf("%d not run", rest)))
 	}
 	if len(parts) == 0 {
@@ -548,30 +559,31 @@ func summaryParts(c tree.Counts) []string {
 	return parts
 }
 
-// renderStatusLines is vitest's closing pair: a badge with the state, then
-// "press ? to show help, press q to quit" aligned under the text. While
-// dotnet is busy the header already says so, so only the hint remains.
-func (m *Model) renderStatusLines() []string {
-	hint := strings.Repeat(" ", 7) + styleDim.Render("press ? to show help, press q to quit")
-	var line string
+// stateLine is what dtest is doing: a status message, building or listing
+// as plain text, or a PASS / FAIL badge once runs have finished. It is
+// empty before the first run and while tests run: the spinners in the tree
+// and the running counts already show that, and changing text here made
+// the block jump.
+func (m *Model) stateLine() string {
 	switch {
 	case m.status != "":
 		badge := badgeInfo.Render("INFO")
 		if m.statusErr {
 			badge = badgeFail.Render("FAIL")
 		}
-		line = " " + badge + " " + m.status
-	case m.building, m.loading > 0, m.run != nil:
-		return []string{hint}
+		return " " + badge + " " + m.status
+	case m.building:
+		return "       Building " + filepath.Base(m.cfg.Target) + "…"
+	case m.loading > 0:
+		return "       Listing tests…"
+	case m.run != nil:
+		return ""
 	case m.runsDone && m.tree.Counts().Failed > 0:
-		line = " " + badgeFail.Render("FAIL") + " Tests failed."
+		return " " + badgeFail.Render("FAIL") + " Tests failed."
 	case m.runsDone:
-		line = " " + badgePass.Render("PASS") + " Tests passed."
-	default:
-		c := m.tree.Counts()
-		line = " " + badgeInfo.Render("DTEST") + fmt.Sprintf(" Ready. %d tests in %d projects.", c.Total, len(m.tree.Projects))
+		return " " + badgePass.Render("PASS") + " Tests passed."
 	}
-	return []string{line, hint}
+	return ""
 }
 
 // Help.

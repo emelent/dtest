@@ -41,5 +41,7 @@ const (
 	iconSkipped = "↓"
 	iconNone    = "·"
 	iconArrow   = "❯"
+	iconOpen    = "▾" // an expanded project, class or theory
+	iconClosed  = "▸" // a collapsed one
 	rule        = "⎯"
 )

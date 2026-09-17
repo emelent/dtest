@@ -88,10 +88,10 @@ func TestLayoutAndNavigation(t *testing.T) {
 		t.Fatalf("rows = %d", len(m.rows))
 	}
 	v := view(m)
-	containsAll(t, v, "DTEST", "⎯⎯ Log  Alpha.Tests ⎯", "⎯⎯ Tests ⎯", "· Alpha.Tests (5 tests)", "5 not run (5)", "Not run yet",
-		"Ready. 5 tests in 1 projects.", "press ? to show help, press q to quit")
-	if strings.Contains(v, "Start at") || strings.Contains(v, "Summary") || strings.Contains(v, "│") {
-		t.Errorf("one bottom pane, no summary block before the first run:\n%s", v)
+	containsAll(t, v, "DTEST", "⎯⎯ Log  Alpha.Tests ⎯", "⎯⎯ Tests ⎯", "▾ Alpha.Tests (5 tests)", "▸ MathTests (4 tests)", "5 not run (5)", "Not run yet",
+		"press ? to show help, press q to quit")
+	if strings.Contains(v, "Start at") || strings.Contains(v, "Summary") || strings.Contains(v, "│") || strings.Contains(v, "Ready") || strings.Count(v, "DTEST") != 1 {
+		t.Errorf("one bottom pane, no summary block or extra text before the first run:\n%s", v)
 	}
 	// The summary block sits flush with the right edge of the bottom pane,
 	// its widest line ending at the last column.
@@ -108,6 +108,33 @@ func TestLayoutAndNavigation(t *testing.T) {
 	if last := lines[len(lines)-1]; !strings.HasSuffix(last, "press q to quit") {
 		t.Errorf("last line should be the hint, got %q", last)
 	}
+	// The state line sits above the block, so the block keeps its place
+	// when a run starts: the Tests line stays on the same screen row.
+	row := func() int {
+		for i, l := range strings.Split(view(m), "\n") {
+			if strings.Contains(l, "Tests  ") && !strings.Contains(l, "⎯") {
+				return i
+			}
+		}
+		return -1
+	}
+	before := row()
+	col := func() int {
+		for _, l := range strings.Split(view(m), "\n") {
+			if i := strings.Index(l, "Tests  ("); i >= 0 {
+				return i
+			}
+		}
+		return -1
+	}
+	beforeCol := col()
+	m.building = true
+	m.refresh()
+	if after := row(); after != before || col() != beforeCol || !strings.Contains(view(m), "Building Sample.slnx…") {
+		t.Errorf("Tests line moved from row %d/col %d to row %d/col %d when building started", before, beforeCol, after, col())
+	}
+	m.building = false
+	m.refresh()
 	// The log pane is about 70% of the height: header + title + log + title + bottom = 40.
 	g := m.layout()
 	if g.logH < 24 || g.logH > 27 || g.bottomH+g.logH+headerH+2*titleH != 40 || g.statsW == 0 || g.treeW+g.statsW+2 != 120 {
@@ -118,6 +145,7 @@ func TestLayoutAndNavigation(t *testing.T) {
 	if len(m.rows) != 6 || m.current().Name != "MathTests" {
 		t.Fatalf("after l: %d rows on %q", len(m.rows), m.current().Name)
 	}
+	containsAll(t, view(m), "▾ MathTests (4 tests)", "· Adds", "▸ Theory (2 tests)")
 	press(m, "l")
 	if m.current().Name != "Adds" {
 		t.Fatalf("l on expanded -> %q", m.current().Name)
@@ -280,9 +308,12 @@ func TestRunFlow(t *testing.T) {
 		t.Fatalf("class should be running: %+v", class.Counts())
 	}
 	v := view(m)
-	containsAll(t, v, "RUN", "Alpha.Tests › MathTests", "4 running", "19:10:48")
-	if strings.Contains(v, "Running Alpha.Tests") {
-		t.Error("the bottom pane must not repeat the header's RUN line")
+	containsAll(t, v, "(5 tests | 4 running)", "19:10:48", "Tests  5 not run (5)")
+	for _, l := range strings.Split(v, "\n") {
+		summary := strings.Contains(l, "Test Projects  ") || strings.Contains(l, "   Tests  ")
+		if strings.Contains(v, "RUN") || strings.Contains(v, "Running") || (summary && strings.Contains(l, "running")) {
+			t.Errorf("no RUN badge or running text in the summary while tests run: %q", l)
+		}
 	}
 	f.emit(dotnet.LineEvent{Text: "  Starting: Alpha.Tests"})
 	f.emit(dotnet.ResultEvent{Result: dotnet.Result{Name: "Alpha.Tests.MathTests.Adds", Outcome: dotnet.OutcomePassed, Duration: 32 * time.Millisecond}})
@@ -321,8 +352,9 @@ func TestRunFlow(t *testing.T) {
 		"Expected: 5",
 		"Actual:   4",
 		"❯ /src/Alpha.Tests/UnitTest1.cs:12",
-		"× MathTests (5 tests | 1 failed | 1 skipped)",
+		"▾ MathTests (5 tests | 1 failed | 1 skipped)",
 		"× Fails 0.001s",
+		"▸ Theory (2 tests | 1 skipped)",
 		"Test Projects  1 failed (1)",
 		"Tests  1 failed | 3 passed | 1 skipped | 1 not run (6)",
 		"Duration  2m34s (tests 0.033s)",
@@ -350,6 +382,9 @@ func TestRunFlow(t *testing.T) {
 		t.Fatalf("n -> %q", m.current().Name)
 	}
 	containsAll(t, view(m), "⎯⎯ Log  Alpha.Tests › MathTests › Fails ⎯", "Stack trace", "at Alpha.Tests.MathTests.Fails()")
+	if strings.Contains(view(m), "× MathTests") {
+		t.Error("groups use fold arrows, not the test glyphs")
+	}
 	if marked := markedLines(m); len(marked) != 1 || !strings.Contains(marked[0], "× Fails") {
 		t.Fatalf("markers = %v", marked)
 	}
@@ -384,6 +419,27 @@ func TestRunFlow(t *testing.T) {
 	<-f.started
 	if f.filter != "FullyQualifiedName=Alpha.Tests.MathTests.Fails" {
 		t.Fatalf("log-pane enter filter = %q", f.filter)
+	}
+}
+
+func TestOutputDrawnOnTick(t *testing.T) {
+	f := stubRun(t)
+	m := newTestModel(t)
+	press(m, "v", "r") // raw output on, run the project
+	<-f.started
+	f.emit(dotnet.LineEvent{Text: "  Determining projects to restore..."})
+	m.Update(<-m.runEvents())
+	if strings.Contains(view(m), "Determining projects") {
+		t.Fatal("a single output line must not rebuild the panes by itself")
+	}
+	m.Update(m.spin.Tick())
+	if !strings.Contains(view(m), "Determining projects") {
+		t.Fatal("the spinner tick draws the lines that arrived")
+	}
+	f.emit(dotnet.DoneEvent{})
+	m.Update(<-m.runEvents())
+	if m.busy() {
+		t.Fatal("run should be over")
 	}
 }
 

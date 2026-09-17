@@ -123,15 +123,12 @@ func run(ctx context.Context, project, filter string, opts Options, emit func(Ev
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		sc := bufio.NewScanner(pr)
-		sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-		for sc.Scan() {
-			line := strings.TrimRight(sc.Text(), "\r")
+		readLines(pr, func(line string) {
 			emit(LineEvent{Text: line})
 			if r, ok := ParseResultLine(line); ok {
 				emit(ResultEvent{Result: r})
 			}
-		}
+		})
 	}()
 	waitErr := cmd.Wait()
 	pw.Close()
@@ -146,6 +143,22 @@ func run(ctx context.Context, project, filter string, opts Options, emit func(Ev
 		return DoneEvent{Err: fmt.Errorf("dotnet test failed: %v", firstError(waitErr, trxErr))}
 	}
 	return DoneEvent{Results: results}
+}
+
+// readLines calls fn for every line of r until it ends. Unlike a Scanner it
+// has no line-length limit, so a pathological line cannot stop the reader
+// and leave dotnet blocked on a full pipe.
+func readLines(r io.Reader, fn func(string)) {
+	br := bufio.NewReaderSize(r, 64*1024)
+	for {
+		line, err := br.ReadString('\n')
+		if line != "" {
+			fn(strings.TrimRight(line, "\r\n"))
+		}
+		if err != nil {
+			return
+		}
+	}
 }
 
 func firstError(errs ...error) error {
@@ -218,11 +231,7 @@ func Build(ctx context.Context, path string, opts Options, emit func(LineEvent))
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
-		sc := bufio.NewScanner(pr)
-		sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
-		for sc.Scan() {
-			emit(LineEvent{Text: strings.TrimRight(sc.Text(), "\r")})
-		}
+		readLines(pr, func(line string) { emit(LineEvent{Text: line}) })
 	}()
 	err := cmd.Wait()
 	pw.Close()
