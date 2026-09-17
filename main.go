@@ -20,11 +20,12 @@ func usage() {
 	fmt.Fprint(os.Stderr, `dtest – run .NET tests from a tree in the terminal
 
 Usage:
-  dtest [flags] <Solution.sln | Solution.slnx | Project.csproj>
+  dtest [flags] [Solution.sln | Solution.slnx | Project.csproj]
 
-The solution or project is built once, its test projects are listed, and
-the tests appear as project → namespace → class → method → case. Press ? in
-the app for the keys.
+Without a file, a solution in the current directory is used, or else its
+first project file. The solution or project is built once, its test
+projects are listed, and the tests appear as project → namespace → class →
+method → case. Press ? in the app for the keys.
 
 Flags:
   -c, --configuration name   build configuration passed to dotnet (default: the project's)
@@ -57,11 +58,21 @@ func main() {
 		fmt.Println("dtest " + version)
 		return
 	}
-	if flag.NArg() != 1 {
+	switch flag.NArg() {
+	case 0:
+		target, err := dotnet.FindTarget(".")
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			fmt.Fprintln(os.Stderr, "pass a .sln, .slnx or project file, or run dtest in a directory that has one")
+			os.Exit(2)
+		}
+		cfg.Target = target
+	case 1:
+		cfg.Target = flag.Arg(0)
+	default:
 		usage()
 		os.Exit(2)
 	}
-	cfg.Target = flag.Arg(0)
 	if !dotnet.IsSolutionFile(cfg.Target) && !dotnet.IsProjectFile(cfg.Target) {
 		fmt.Fprintf(os.Stderr, "%s: expected a .sln, .slnx, .csproj, .fsproj or .vbproj file\n", cfg.Target)
 		os.Exit(2)

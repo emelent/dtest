@@ -156,6 +156,31 @@ func TestProjects(t *testing.T) {
 	}
 }
 
+func TestFindTarget(t *testing.T) {
+	dir := t.TempDir()
+	touch := func(name string) {
+		if err := os.WriteFile(filepath.Join(dir, name), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := FindTarget(dir); err == nil {
+		t.Fatal("empty directory should be an error")
+	}
+	touch("Zeta.csproj")
+	touch("Alpha.fsproj")
+	os.Mkdir(filepath.Join(dir, "Ignored.sln"), 0o755) // a directory, not a file
+	got, err := FindTarget(dir)
+	if err != nil || filepath.Base(got) != "Alpha.fsproj" {
+		t.Errorf("first project: %q %v", got, err)
+	}
+	touch("Shop.slnx")
+	touch("Aardvark.sln")
+	got, err = FindTarget(dir)
+	if err != nil || filepath.Base(got) != "Aardvark.sln" {
+		t.Errorf("solution should win, first by name: %q %v", got, err)
+	}
+}
+
 func TestLocate(t *testing.T) {
 	dir := t.TempDir()
 	os.MkdirAll(filepath.Join(dir, "bin"), 0o755)

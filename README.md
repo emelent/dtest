@@ -23,7 +23,7 @@ whatever part of the tree you select while streaming the output.
 - Tree from project down to namespace, class, method and theory row
 - Run a project, namespace, class, method or a set of marked nodes; runs queue up, one `dotnet test` per project
 - Live status while tests run: a spinner on the running tests, ✓ / ✗ / ○ as each result comes in, counts rolled up to every parent
-- Log pane with the streamed `dotnet test` output coloured by kind (results green, red and yellow, errors red, runner chatter dim), or the message, stack trace and captured output of the selected test. By default only result lines, failure details, summaries and build errors show; `v` reveals everything
+- Log pane with the streamed `dotnet test` output coloured by kind (results green, red and yellow, errors red, runner chatter dim), or the message, stack trace and captured output of the selected test. Expected values are green and actual values red in every failure message. By default the log is minimal: each failing test with its assertion or exception, one line of totals per run, and build errors; `v` reveals everything
 - Open the selected test's source in Neovim, either a running instance (via the socket in `$nvim_sock`) or one launched in place
 - Vim motions throughout; `/` filters the tree as you type
 
@@ -43,8 +43,11 @@ make install         # /usr/local/bin/dtest (uses sudo)
 ## Usage
 
 ```
-dtest [flags] <Solution.sln | Solution.slnx | Project.csproj>
+dtest [flags] [Solution.sln | Solution.slnx | Project.csproj]
 ```
+
+Without a file, dtest uses a solution file in the current directory, or
+else the first project file there (both in name order).
 
 | Flag | Description |
 | --- | --- |
@@ -81,7 +84,7 @@ Press `?` in the app for this list.
 | `s` / `S` | Next / previous skipped test |
 | `/` | Filter the tree by name; `enter` keeps the filter, `esc` clears it |
 | `o` | Open the test in Neovim |
-| `v` | Log pane: results only (default) or the full dotnet output |
+| `v` | Log pane: minimal (default) or the full dotnet output |
 | `tab` | Focus the log pane (`j`/`k`, `ctrl+d`/`u`, `g`/`G` scroll; `h`, `esc` or `tab` return) |
 | `ctrl+r` | Rebuild and list the tests again |
 | `q`, `ctrl+c` | Quit |
@@ -121,6 +124,7 @@ theories, three deliberate failures, two skipped tests and a few slow tests.
 ```sh
 make build
 ./dtest sample/Shop.slnx
+cd sample && ../dtest        # or let it find Shop.slnx itself
 ```
 
 ## Development

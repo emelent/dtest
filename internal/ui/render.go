@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -230,7 +231,7 @@ func (m *Model) statusIcon(s tree.Status) string {
 // logTitle names what the log pane shows.
 func (m *Model) logTitle() string {
 	n := m.current()
-	mode := " (results)"
+	mode := " (minimal)"
 	if m.fullLog {
 		mode = " (full)"
 	}
@@ -265,13 +266,14 @@ func (m *Model) refreshLog() {
 }
 
 // contentSignature cheaply identifies content so the viewport is only reset
-// when it changes: run logs are append-only, so their length is enough; a
-// test detail is short and may change without growing.
+// when it changes: a full run log is append-only, so its length is enough;
+// a test detail or a minimal log is short and may change without growing
+// (the totals line updates in place as summary lines stream in).
 func contentSignature(key string, lines []string) string {
-	if strings.HasPrefix(key, "test:") {
-		return strings.Join(lines, "\n")
+	if strings.HasPrefix(key, "log:full:") {
+		return fmt.Sprint(len(lines))
 	}
-	return fmt.Sprint(len(lines))
+	return strings.Join(lines, "\n")
 }
 
 // logContent picks the lines to show and a key identifying them.
@@ -280,7 +282,7 @@ func (m *Model) logContent() (string, []string) {
 	if n != nil && n.IsLeaf() {
 		return "test:" + n.Project().Path + "/" + n.FQN, m.renderDetail(n)
 	}
-	mode := "results:"
+	mode := "minimal:"
 	if m.fullLog {
 		mode = "full:"
 	}
@@ -292,8 +294,8 @@ func (m *Model) logContent() (string, []string) {
 	return "log:" + mode + buildLogKey, m.presentLog(m.logs[buildLogKey])
 }
 
-// presentLog prepares raw output for the pane: filtered to results unless
-// the full log is on, then coloured.
+// presentLog prepares raw output for the pane: reduced to failures and
+// totals unless the full log is on, then coloured.
 func (m *Model) presentLog(lines []string) []string {
 	if !m.fullLog {
 		lines = resultLines(lines)
@@ -301,35 +303,72 @@ func (m *Model) presentLog(lines []string) []string {
 	return colorLog(lines)
 }
 
-// resultLines keeps what matters from dotnet output: the command, each
-// test's result line and the whole block after a failure (message and
-// stack trace, up to the next blank line), the run summary and build errors
-// or warnings. Runner chatter, restore and build progress are dropped.
+// resultLines reduces dotnet output to the minimum: for each failed test
+// its name and the failing assertion or exception (the message, without the
+// stack trace), one summary line per run such as "33 tests: 30 passed,
+// 2 failed, 1 skipped", and build errors so a broken build is not silent.
 func resultLines(lines []string) []string {
 	var out []string
 	inFailure := false
+	var summary *runSummary
+	flush := func() {
+		if summary != nil {
+			out = append(out, summary.String())
+			summary = nil
+		}
+	}
 	for _, line := range lines {
 		trimmed := strings.TrimSpace(line)
+		if summary != nil && !summary.take(trimmed) {
+			flush()
+		}
 		switch {
-		case inFailure && trimmed == "":
+		case inFailure && (trimmed == "" || strings.HasPrefix(trimmed, "Stack Trace:")):
 			inFailure = false
 		case inFailure:
-			out = append(out, line)
+			if !strings.HasPrefix(trimmed, "Error Message:") {
+				out = append(out, line)
+			}
 		case strings.HasPrefix(trimmed, "Failed "):
 			inFailure = true
 			out = append(out, line)
-		case strings.HasPrefix(line, "$ "),
-			strings.HasPrefix(trimmed, "Passed "), strings.HasPrefix(trimmed, "Skipped "),
-			strings.HasPrefix(trimmed, "Test Run "), strings.HasPrefix(trimmed, "Total tests:"),
-			strings.HasPrefix(trimmed, "Passed:"), strings.HasPrefix(trimmed, "Failed:"), strings.HasPrefix(trimmed, "Skipped:"),
-			strings.Contains(line, ": error "), strings.Contains(line, ": warning "),
-			strings.Contains(line, "Build FAILED"), strings.Contains(line, "Build succeeded"),
-			strings.Contains(line, "No test is available"), strings.HasPrefix(trimmed, "dotnet test failed"):
+		case strings.HasPrefix(trimmed, "Total tests:"):
+			summary = &runSummary{}
+			summary.take(trimmed)
+		case strings.Contains(line, ": error "), strings.Contains(line, "Build FAILED"), strings.HasPrefix(trimmed, "dotnet test failed"):
 			out = append(out, line)
 		}
 	}
+	flush()
 	return out
 }
+
+// runSummary gathers the console logger's summary counters into one line.
+type runSummary struct{ total, passed, failed, skipped string }
+
+// take records a summary line, reporting whether it was one.
+func (s *runSummary) take(trimmed string) bool {
+	for prefix, dst := range map[string]*string{"Total tests:": &s.total, "Passed:": &s.passed, "Failed:": &s.failed, "Skipped:": &s.skipped} {
+		if strings.HasPrefix(trimmed, prefix) {
+			*dst = strings.TrimSpace(strings.TrimPrefix(trimmed, prefix))
+			return true
+		}
+	}
+	return false
+}
+
+func (s *runSummary) String() string {
+	or := func(v string) string {
+		if v == "" {
+			return "0"
+		}
+		return v
+	}
+	return fmt.Sprintf("%s tests: %s passed, %s failed, %s skipped", or(s.total), or(s.passed), or(s.failed), or(s.skipped))
+}
+
+// summaryLine matches the line runSummary produces.
+var summaryLine = regexp.MustCompile(`^\d+ tests: \d+ passed, (\d+) failed, \d+ skipped$`)
 
 // Log line classes, matched in order; the first match styles the line.
 var logRules = []struct {
@@ -345,7 +384,7 @@ var logRules = []struct {
 	{func(s string) bool {
 		return strings.Contains(s, "error ") || strings.Contains(s, "Error Message") || strings.Contains(s, "Test Run Failed") ||
 			strings.Contains(s, "Build FAILED") || strings.Contains(s, "[FAIL]") || strings.HasPrefix(strings.TrimLeft(s, " "), "Failed:") ||
-			strings.Contains(s, "Expected:") || strings.Contains(s, "Actual:") || strings.Contains(s, "Exception")
+			strings.Contains(s, "Exception") || strings.Contains(s, "Assert.") || strings.Contains(s, "Failure")
 	}, styleLogError},
 	{func(s string) bool {
 		return strings.Contains(s, "warning ") || strings.Contains(s, "[SKIP]") || strings.HasPrefix(strings.TrimLeft(s, " "), "Skipped:")
@@ -356,20 +395,61 @@ var logRules = []struct {
 }
 
 // colorLog styles raw dotnet output for reading: results green, red and
-// yellow, errors red, commands cyan, runner chatter and stack frames dim,
-// everything else in the terminal's default colour.
+// yellow, expected values green and actual values red, errors red, commands
+// cyan, runner chatter and stack frames dim, everything else in the
+// terminal's default colour.
 func colorLog(lines []string) []string {
 	out := make([]string, len(lines))
 	for i, line := range lines {
-		out[i] = line
-		for _, r := range logRules {
-			if r.match(line) {
-				out[i] = r.style.Render(line)
-				break
-			}
-		}
+		out[i] = colorLine(line)
 	}
 	return out
+}
+
+func colorLine(line string) string {
+	if m := summaryLine.FindStringSubmatch(line); m != nil {
+		if m[1] == "0" {
+			return stylePassed.Render(line)
+		}
+		return styleFailed.Render(line)
+	}
+	if s, ok := colorAssertion(line); ok {
+		return s
+	}
+	for _, r := range logRules {
+		if r.match(line) {
+			return r.style.Render(line)
+		}
+	}
+	return line
+}
+
+// colorAssertion highlights the two sides of a failed comparison: the
+// expected value green and the actual value red. It understands xUnit and
+// NUnit ("Expected: …" then "Actual: …" or "But was: …" on their own lines)
+// and MSTest ("Expected:<…>. Actual:<…>." on one line).
+func colorAssertion(line string) (string, bool) {
+	trimmed := strings.TrimLeft(line, " ")
+	indent := line[:len(line)-len(trimmed)]
+	switch {
+	case strings.HasPrefix(trimmed, "Expected"):
+		if i := strings.Index(trimmed, "Actual"); i > 0 {
+			return indent + styleExpected.Render(trimmed[:i]) + styleActual.Render(trimmed[i:]), true
+		}
+		return indent + styleExpected.Render(trimmed), true
+	case strings.HasPrefix(trimmed, "Actual"), strings.HasPrefix(trimmed, "But was"):
+		return indent + styleActual.Render(trimmed), true
+	}
+	return "", false
+}
+
+// colorMessage styles one line of a failure message: assertion sides in
+// their colours, anything else red.
+func colorMessage(line string) string {
+	if s, ok := colorAssertion(line); ok {
+		return s
+	}
+	return styleLogError.Render(line)
 }
 
 // renderDetail describes one test's latest result.
@@ -392,7 +472,7 @@ func (m *Model) renderDetail(n *tree.Node) []string {
 	if r.Message != "" {
 		lines = append(lines, "", styleFailed.Render("Message"))
 		for _, l := range strings.Split(r.Message, "\n") {
-			lines = append(lines, styleLogError.Render(l))
+			lines = append(lines, colorMessage(l))
 		}
 	}
 	if r.StackTrace != "" {
@@ -430,7 +510,7 @@ var helpRows = []helpRow{
 	{"s / S", "next / previous skipped test"},
 	{"/", "filter the tree by name; enter keeps it, esc clears it"},
 	{"o", "open the test's source in Neovim (see below)"},
-	{"v", "log pane: results only (default) or the full dotnet output"},
+	{"v", "log pane: minimal (default: failures and totals) or the full dotnet output"},
 	{"tab", "focus the log pane; h, esc or tab come back"},
 	{"ctrl+r", "rebuild and list tests again"},
 	{"?", "this help"},

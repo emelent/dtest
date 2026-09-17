@@ -28,6 +28,37 @@ func IsSolutionFile(path string) bool {
 	return ext == ".sln" || ext == ".slnx"
 }
 
+// FindTarget picks what to open when no file is given: a solution file in
+// dir, otherwise the first project file, each in name order. It reports an
+// error when dir holds neither.
+func FindTarget(dir string) (string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return "", err
+	}
+	var solutions, projects []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		switch {
+		case IsSolutionFile(e.Name()):
+			solutions = append(solutions, e.Name())
+		case IsProjectFile(e.Name()):
+			projects = append(projects, e.Name())
+		}
+	}
+	sort.Strings(solutions)
+	sort.Strings(projects)
+	switch {
+	case len(solutions) > 0:
+		return filepath.Join(dir, solutions[0]), nil
+	case len(projects) > 0:
+		return filepath.Join(dir, projects[0]), nil
+	}
+	return "", fmt.Errorf("no solution or project file in %s", dir)
+}
+
 // Projects returns the absolute paths of the test projects reachable from
 // path: the project itself when path is a project file, or every test
 // project in a solution. When no project in a solution looks like a test

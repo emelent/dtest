@@ -325,20 +325,10 @@ func TestResultLines(t *testing.T) {
 	}
 	got := resultLines(raw)
 	want := []string{
-		"$ dotnet test x",
-		"  Passed Ns.C.M [1 ms]",
 		"  Failed Ns.C.N [1 ms]",
-		"  Error Message:",
 		"   Assert.Equal() Failure",
 		"Expected: 5",
-		"  Stack Trace:",
-		"     at Ns.C.N() in /x.cs:line 3",
-		"  Skipped Ns.C.O [< 1 ms]",
-		"Test Run Failed.",
-		"Total tests: 3",
-		"     Passed: 1",
-		"     Failed: 1",
-		"    Skipped: 1",
+		"3 tests: 1 passed, 1 failed, 1 skipped",
 		"Program.cs(3,5): error CS1002: ; expected",
 	}
 	if strings.Join(got, "\n") != strings.Join(want, "\n") {
@@ -348,11 +338,11 @@ func TestResultLines(t *testing.T) {
 
 func TestLogToggle(t *testing.T) {
 	m := newTestModel(t)
-	m.logs[buildLogKey] = []string{"$ dotnet build", "  Determining projects to restore...", "Build succeeded."}
+	m.logs[buildLogKey] = []string{"$ dotnet build", "  Determining projects to restore...", "Program.cs(3,5): error CS1002: ; expected", "Build FAILED."}
 	m.refreshLog()
 	v := view(m)
-	if !strings.Contains(v, "Log: build (results)") || strings.Contains(v, "Determining projects") || !strings.Contains(v, "Build succeeded.") {
-		t.Fatalf("results view:\n%s", v)
+	if !strings.Contains(v, "Log: build (minimal)") || strings.Contains(v, "Determining projects") || !strings.Contains(v, "error CS1002") {
+		t.Fatalf("minimal view:\n%s", v)
 	}
 	press(m, "v")
 	v = view(m)
@@ -360,8 +350,42 @@ func TestLogToggle(t *testing.T) {
 		t.Fatalf("full view:\n%s", v)
 	}
 	press(m, "tab", "v") // works from the log pane too
-	if m.fullLog || !strings.Contains(view(m), "(results)") {
+	if m.fullLog || !strings.Contains(view(m), "(minimal)") {
 		t.Fatal("v should toggle back from the log pane")
+	}
+	// The totals line is rewritten in place as summary lines stream in.
+	m.logs[buildLogKey] = []string{"Total tests: 3"}
+	m.refreshLog()
+	if !strings.Contains(view(m), "3 tests: 0 passed, 0 failed, 0 skipped") {
+		t.Fatalf("partial summary:\n%s", view(m))
+	}
+	m.logs[buildLogKey] = append(m.logs[buildLogKey], "     Passed: 2", "     Failed: 1")
+	m.refreshLog()
+	if !strings.Contains(view(m), "3 tests: 2 passed, 1 failed, 0 skipped") {
+		t.Fatalf("summary should update in place:\n%s", view(m))
+	}
+}
+
+func TestColorAssertion(t *testing.T) {
+	green, red := styleExpected.Render, styleActual.Render
+	cases := map[string]string{
+		"Expected: 5":                green("Expected: 5"),
+		"Actual:   4":                red("Actual:   4"),
+		"  But was:  4":              "  " + red("But was:  4"),
+		"Expected:<5>. Actual:<4>. ": green("Expected:<5>. ") + red("Actual:<4>. "),
+		"Assert.Equal() Failure":     styleLogError.Render("Assert.Equal() Failure"),
+	}
+	for in, want := range cases {
+		if got := colorMessage(in); got != want {
+			t.Errorf("colorMessage(%q) = %q, want %q", in, got, want)
+		}
+	}
+	if colorLine("Expected: 5") != green("Expected: 5") || colorLine("Actual: 4") != red("Actual: 4") {
+		t.Error("log lines should get the same assertion colours")
+	}
+	if colorLine("3 tests: 3 passed, 0 failed, 0 skipped") != stylePassed.Render("3 tests: 3 passed, 0 failed, 0 skipped") ||
+		colorLine("3 tests: 2 passed, 1 failed, 0 skipped") != styleFailed.Render("3 tests: 2 passed, 1 failed, 0 skipped") {
+		t.Error("summary line colour should follow the failure count")
 	}
 }
 
@@ -372,6 +396,7 @@ func TestColorLog(t *testing.T) {
 		"  Failed Ns.C.N [1 ms]",
 		"  Skipped Ns.C.O",
 		"[xUnit.net 00:00:00.01]   Starting: X",
+		"   Assert.Equal() Failure: Strings differ",
 		"Program.cs(3,5): error CS1002: ; expected",
 		"Program.cs(3,5): warning CS0168: unused",
 		"   at Ns.C.N() in /x.cs:line 3",
@@ -384,15 +409,15 @@ func TestColorLog(t *testing.T) {
 			t.Errorf("line %d text changed: %q", i, ansi.Strip(out[i]))
 		}
 	}
-	if out[9] != lines[9] {
-		t.Errorf("plain output must stay unstyled: %q", out[9])
+	if out[10] != lines[10] {
+		t.Errorf("plain output must stay unstyled: %q", out[10])
 	}
-	for i := 0; i < 9; i++ {
+	for i := 0; i < 10; i++ {
 		if out[i] == lines[i] {
 			t.Errorf("line %d should be styled: %q", i, lines[i])
 		}
 	}
-	if out[1] == out[2] || out[2] != styleFailed.Render(lines[2]) || out[5] != styleLogError.Render(lines[5]) {
+	if out[1] == out[2] || out[2] != styleFailed.Render(lines[2]) || out[5] != styleLogError.Render(lines[5]) || out[6] != styleLogError.Render(lines[6]) {
 		t.Error("result and error lines should carry their own styles")
 	}
 }
@@ -497,8 +522,9 @@ func TestOpenInEditor(t *testing.T) {
 func TestLogPaneAndHelp(t *testing.T) {
 	m := newTestModel(t)
 	m.logs[buildLogKey] = []string{"$ dotnet build", "Build succeeded."}
+	m.fullLog = true
 	m.refreshLog()
-	if v := view(m); !strings.Contains(v, "Log: build (results)") || !strings.Contains(v, "Build succeeded.") {
+	if v := view(m); !strings.Contains(v, "Log: build (full)") || !strings.Contains(v, "Build succeeded.") {
 		t.Fatalf("build log should show:\n%s", v)
 	}
 	press(m, "tab")

@@ -30,6 +30,8 @@ var (
 	styleKey      = lipgloss.NewStyle().Foreground(colCyan).Bold(true)
 	styleCommand  = lipgloss.NewStyle().Foreground(colCyan)
 	styleLogError = lipgloss.NewStyle().Foreground(colRed)
+	styleExpected = lipgloss.NewStyle().Foreground(colGreen)
+	styleActual   = lipgloss.NewStyle().Foreground(colRed)
 )
 
 // Status icons shown in the tree.
