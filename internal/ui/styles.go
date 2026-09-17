@@ -33,6 +33,14 @@ var (
 	badgeInfo = lipgloss.NewStyle().Background(colCyan).Foreground(colBlack).Bold(true).Padding(0, 1)
 )
 
+// Cursor line backgrounds, as raw SGR codes so they can be re-applied after
+// the resets inside a styled line: 256-colour greys, brighter for the
+// focused pane.
+const (
+	bgFocused   = "\x1b[48;5;237m"
+	bgUnfocused = "\x1b[48;5;235m"
+)
+
 // Status glyphs, as vitest uses them, plus one for queued tests.
 const (
 	iconPassed  = "✓"
@@ -40,7 +48,7 @@ const (
 	iconSkipped = "↓"
 	iconNone    = "·"
 	iconQueued  = "○" // scheduled in a run that has not started
-	iconArrow   = "❯"
+	iconArrow   = "❯" // marks a source location line in the log
 	iconOpen    = "▾" // an expanded project, class or theory
 	iconClosed  = "▸" // a collapsed one
 	rule        = "⎯"

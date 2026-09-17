@@ -11,6 +11,7 @@ public class OrdersControllerTests
     [Fact]
     public async Task Get_Paginates()
     {
+        throw new NotImplementedException();
         await Task.Delay(300);
         Assert.Equal(20, Enumerable.Range(0, 100).Take(20).Count());
     }

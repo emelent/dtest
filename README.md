@@ -20,7 +20,7 @@ Actual:   428
 
 
 ⎯⎯ Tests ⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
-❯ ▾ Shop.Api.Tests (16 tests | 1 failed | 1 skipped) 1.1s           Test Projects  1 failed | 1 passed (2)
+  ▾ Shop.Api.Tests (16 tests | 1 failed | 1 skipped) 1.1s           Test Projects  1 failed | 1 passed (2)
     ▸ Controllers.OrdersControllerTests (3 tests) 0.305s                    Tests  1 failed | 46 passed | 2 skipped (49)
     ▸ Integration.CheckoutFlowTests (2 tests | 1 skipped) 0.803s         Start at  21:36:37
     ▾ Middleware.RateLimitMiddlewareTests (2 tests | 1 failed) 0.002s    Duration  4.0s (tests 2.3s)
@@ -40,9 +40,11 @@ ctrl+j/k for their own pane movement.
   actual values red), failing location, stack trace and captured output.
   For a project, class or theory: its passed / failed / skipped tally and
   every failure beneath it.
-  Build errors show first. With the log focused, `j`/`k`, `gg`/`G`,
-  `ctrl+d`/`ctrl+u` scroll it. `v` swaps in the raw `dotnet` output of the
-  selected project, coloured by kind.
+  Build errors show first. Long lines wrap. With the log focused, `j`/`k`,
+  `gg`/`G` and `ctrl+d`/`ctrl+u` move a cursor line through it (the title
+  shows its position, `12/80`), and `ctrl+e`/`ctrl+y` scroll without moving
+  it. `v` swaps in the raw `dotnet` output of the selected project,
+  coloured by kind.
 - **Tests** (bottom) is the tree of projects, classes, methods and theory
   rows, with vitest-style counts and durations on every group, and vitest's
   summary block (projects, tests, start time, duration, then the `RUN` /
@@ -98,9 +100,10 @@ Press `?` in the app for this list.
 | Key | Action |
 | --- | --- |
 | `ctrl+j` / `ctrl+k`, `tab` | Switch between the log and the tree |
-| `j` / `k`, `↓` / `↑` | Move through the tree, or scroll the log |
+| `j` / `k`, `↓` / `↑` | Move through the tree, or the lines of the log |
 | `gg` / `G` | Top / bottom |
 | `ctrl+d` / `ctrl+u` | Half page |
+| `ctrl+e` / `ctrl+y` | Scroll the log without moving its cursor |
 | `l` / `h` | Expand / collapse a project, class or theory (`h` on a collapsed node selects its parent) |
 | `space` | Toggle a fold |
 | `enter`, `r` | Run the selected project, class or test |
@@ -110,7 +113,7 @@ Press `?` in the app for this list.
 | `a` | Show all tests again (`esc` does too) |
 | `x` | Cancel the running tests and drop the queue |
 | `n` / `N` | Next / previous failed test |
-| `o` | Open the selected test in Neovim; a failed test opens at the failing line |
+| `o` | Open in Neovim: the stack frame under the log cursor, else a failed test's failing line, else the declaration |
 | `t`, `/` | Filter the tree by test or project name; `enter` keeps the filter, `esc` clears every filter |
 | `v` | Show the raw dotnet output of the selected project instead of its results |
 | `ctrl+r` | Rebuild and list the tests again |
@@ -128,9 +131,11 @@ summary's Duration is the wall-clock time of the whole batch of runs.
 
 ## Neovim
 
-`o` opens a failed test at the failing line taken from its stack trace, and
-any other node at its declaration, found by scanning the project's source
-files. Either way the location is sent to
+`o` opens the file and line named by the log line under the cursor when it
+is a stack frame (so an exception thrown deep in the code under test opens
+there), else a failed test at the failing line from its stack trace, else
+the selected node at its declaration, found by scanning the project's
+source files. Either way the location is sent to
 the Neovim listening on the socket named by the `nvim_sock` environment
 variable (`NVIM_SOCK` works too) or by `--nvim-socket`. Start Neovim
 listening on the socket, as in [ghpr](../ghpr):

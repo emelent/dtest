@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -83,6 +85,9 @@ type Model struct {
 	log           viewport.Model
 	logSig        string
 	logNode       *tree.Node // whose results the log shows
+	logLines      []string   // the log's lines, unstyled, for the cursor and o
+	logCursor     int        // the log's cursor line
+	logStarts     []int      // first display row of each log line, once wrapped
 	treeView      viewport.Model
 	treeSig       string
 	spin          spinner.Model
@@ -509,9 +514,11 @@ func (m *Model) Shutdown() {
 
 // Editor.
 
-// openInEditor sends the source for the selected node to Neovim: the
-// offending line of a failed test, otherwise the declaration. Without a
-// listening server nvim is opened in the terminal instead.
+// openInEditor sends a source position to Neovim: from the log pane, the
+// file and line named on the cursor's line when it is a stack frame or
+// location; otherwise the offending line of a failed test, or the
+// declaration of whatever is selected. Without a listening server nvim is
+// opened in the terminal instead.
 func (m *Model) openInEditor() tea.Cmd {
 	n := m.current()
 	if n == nil {
@@ -519,7 +526,10 @@ func (m *Model) openInEditor() tea.Cmd {
 	}
 	var loc dotnet.Location
 	ok := false
-	if n.Status() == tree.StatusFailed && n.Result != nil {
+	if m.focus == paneLog && m.logCursor < len(m.logLines) {
+		loc, ok = locationInLine(m.logLines[m.logCursor])
+	}
+	if !ok && n.Status() == tree.StatusFailed && n.Result != nil {
 		loc, ok = n.Result.FailureLocation()
 	}
 	if !ok {
@@ -538,6 +548,34 @@ func (m *Model) openInEditor() tea.Cmd {
 		return m.setStatus("nvim not found in PATH", true)
 	}
 	return tea.ExecProcess(editor.LaunchCmd(loc.File, loc.Line), func(err error) tea.Msg { return editorDoneMsg{err: err} })
+}
+
+// Source positions as they appear in log lines: .NET stack frames
+// ("at X in /path/file.cs:line 12"), xUnit's own frames
+// ("/path/file.cs(12,0): at X") and dtest's location lines ("❯ path:12").
+var (
+	frameLocation = regexp.MustCompile(` in (.+?):line (\d+)`)
+	parenLocation = regexp.MustCompile(`(\S+?\.\w+)\((\d+),\d+\)`)
+	arrowLocation = regexp.MustCompile(iconArrow + ` (\S+):(\d+)$`)
+)
+
+// locationInLine extracts a file and line from a log line, resolving a
+// relative path against the working directory.
+func locationInLine(line string) (dotnet.Location, bool) {
+	for _, re := range []*regexp.Regexp{frameLocation, arrowLocation, parenLocation} {
+		if m := re.FindStringSubmatch(strings.TrimRight(line, " ")); m != nil {
+			n, err := strconv.Atoi(m[2])
+			if err != nil {
+				continue
+			}
+			path := m[1]
+			if abs, err := filepath.Abs(path); err == nil {
+				path = abs
+			}
+			return dotnet.Location{File: path, Line: n}, true
+		}
+	}
+	return dotnet.Location{}, false
 }
 
 // locateNode finds the source position for a node: the project file for a
@@ -574,6 +612,15 @@ func (m *Model) current() *tree.Node {
 
 func (m *Model) move(delta int) {
 	m.cursor = clamp(m.cursor+delta, len(m.rows))
+}
+
+// moveLog moves the log's cursor line and scrolls it into view.
+func (m *Model) moveLog(delta int) {
+	m.logCursor = clamp(m.logCursor+delta, len(m.logLines))
+	m.refreshLog()
+	if m.logCursor < len(m.logStarts) {
+		m.log.EnsureVisible(m.logStarts[m.logCursor], 0, 0)
+	}
 }
 
 func clamp(i, n int) int {

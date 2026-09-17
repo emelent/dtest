@@ -2,6 +2,7 @@ package ui
 
 import (
 	"context"
+	"fmt"
 	"os/exec"
 	"strings"
 	"testing"
@@ -61,12 +62,13 @@ func press(m *Model, keys ...string) tea.Cmd {
 
 func view(m *Model) string { return ansi.Strip(m.View().Content) }
 
-// markedLines are the visible lines carrying the cursor marker.
+// markedLines are the visible lines carrying the cursor background, as
+// plain text.
 func markedLines(m *Model) []string {
 	var out []string
-	for _, l := range strings.Split(view(m), "\n") {
-		if strings.HasPrefix(l, iconArrow) {
-			out = append(out, l)
+	for _, l := range strings.Split(m.View().Content, "\n") {
+		if strings.Contains(l, bgFocused) || strings.Contains(l, bgUnfocused) {
+			out = append(out, ansi.Strip(l))
 		}
 	}
 	return out
@@ -163,6 +165,17 @@ func TestLayoutAndNavigation(t *testing.T) {
 	if m.current().Name != "Theory" || !strings.Contains(view(m), "(n: 1)") {
 		t.Fatalf("space should expand the theory, on %q", m.current().Name)
 	}
+	// The highlighted tree row keeps its colours and spans the tree width.
+	for _, l := range strings.Split(m.View().Content, "\n") {
+		if strings.Contains(l, bgFocused) && strings.Contains(l, "Theory") {
+			if !strings.Contains(l, "\x1b[90m") { // the dim arrow's colour survives
+				t.Errorf("highlighted row lost its colours: %q", l)
+			}
+			if strings.Count(l, bgFocused) < 2 {
+				t.Errorf("background should be re-applied after resets: %q", l)
+			}
+		}
+	}
 	press(m, "h")
 	if strings.Contains(view(m), "(n: 1)") {
 		t.Fatal("h should collapse the theory")
@@ -179,8 +192,12 @@ func TestLayoutAndNavigation(t *testing.T) {
 	if m.cursor != 0 {
 		t.Fatalf("ctrl+u -> %d", m.cursor)
 	}
-	if marked := markedLines(m); len(marked) != 1 || !strings.Contains(marked[0], "Alpha.Tests (5 tests)") {
-		t.Fatalf("tree marker = %v", marked)
+	// One highlighted row in the log (dim, unfocused), one in the tree.
+	if marked := markedLines(m); len(marked) != 2 || !strings.Contains(marked[1], "Alpha.Tests (5 tests)") {
+		t.Fatalf("markers = %v", marked)
+	}
+	if !strings.Contains(m.View().Content, bgUnfocused) || !strings.Contains(m.View().Content, bgFocused) {
+		t.Fatal("the unfocused pane's cursor is dimmer than the focused one's")
 	}
 }
 
@@ -218,20 +235,63 @@ func TestPaneFocusAndLogScroll(t *testing.T) {
 		t.Fatalf("selecting a node shows its log from the top: %q offset %d", m.current().Name, m.log.YOffset())
 	}
 	press(m, "ctrl+j", "j", "j")
-	if m.focus != paneLog || m.log.YOffset() != 2 || m.current() != fails {
-		t.Fatalf("j in the log scrolls it: focus=%v offset=%d", m.focus, m.log.YOffset())
+	if m.focus != paneLog || m.logCursor != 2 || m.current() != fails {
+		t.Fatalf("j in the log moves its cursor: focus=%v cursor=%d", m.focus, m.logCursor)
+	}
+	if v := view(m); !strings.Contains(v, fmt.Sprintf(" 3/%d ⎯", len(m.logLines))) {
+		t.Fatalf("title should show the position:\n%s", v)
 	}
 	press(m, "G")
-	if !m.log.AtBottom() {
-		t.Fatal("G scrolls to the bottom")
+	if m.logCursor != len(m.logLines)-1 || !m.log.AtBottom() {
+		t.Fatal("G moves to the last line and scrolls there")
 	}
 	press(m, "g", "g")
-	if m.log.YOffset() != 0 {
-		t.Fatal("gg scrolls to the top")
+	if m.logCursor != 0 || m.log.YOffset() != 0 {
+		t.Fatal("gg moves to the top")
 	}
 	press(m, "ctrl+d")
+	if m.logCursor != m.log.Height()/2 {
+		t.Fatalf("ctrl+d moves half a page, cursor = %d", m.logCursor)
+	}
+	press(m, "ctrl+d", "ctrl+d")
 	if m.log.YOffset() == 0 {
-		t.Fatal("ctrl+d scrolls half a page")
+		t.Fatal("moving the cursor below the pane scrolls it")
+	}
+	// Long lines wrap instead of being cut off.
+	long := strings.Repeat("word ", 40)
+	fails.Result.Message = long
+	press(m, "g", "g")
+	m.logSig = "" // force a rebuild with the new message
+	m.refresh()
+	if v := view(m); !strings.Contains(v, "word word") || strings.Contains(v, "…word") {
+		t.Fatalf("message should wrap:\n%s", v)
+	}
+	if strings.Count(view(m), "word") != 40 {
+		t.Fatalf("every word of the wrapped message should be visible and whole, got %d", strings.Count(view(m), "word"))
+	}
+	// The position counts logical lines, not wrapped rows, and G still
+	// reaches the last one.
+	press(m, "G")
+	if m.logCursor != len(m.logLines)-1 || !strings.Contains(view(m), fmt.Sprintf(" %d/%d ⎯", len(m.logLines), len(m.logLines))) {
+		t.Fatalf("position after G: cursor %d of %d", m.logCursor, len(m.logLines))
+	}
+}
+
+func TestLocationInLine(t *testing.T) {
+	cases := map[string]dotnet.Location{
+		"   at Shop.Core.Pricing.Discount.Percent() in /src/Shop.Core/Pricing/Discount.cs:line 9":               {File: "/src/Shop.Core/Pricing/Discount.cs", Line: 9},
+		" ❯ /src/tests/DiscountTests.cs:38":                                                                     {File: "/src/tests/DiscountTests.cs", Line: 38},
+		"[xUnit.net 00:00:00.06]         /src/Alpha.Tests/UnitTest1.cs(12,0): at Alpha.Tests.MathTests.Fails()": {File: "/src/Alpha.Tests/UnitTest1.cs", Line: 12},
+	}
+	for line, want := range cases {
+		if got, ok := locationInLine(line); !ok || got != want {
+			t.Errorf("locationInLine(%q) = %+v %v, want %+v", line, got, ok, want)
+		}
+	}
+	for _, line := range []string{"Expected: 5", "  × Fails 0.001s", "   at System.Reflection.MethodBaseInvoker.InterpretedInvoke_Method(Object obj, IntPtr* args)"} {
+		if _, ok := locationInLine(line); ok {
+			t.Errorf("%q should have no location", line)
+		}
 	}
 }
 
@@ -405,7 +465,7 @@ func TestRunFlow(t *testing.T) {
 	if strings.Contains(view(m), "× MathTests") {
 		t.Error("groups use fold arrows, not the test glyphs")
 	}
-	if marked := markedLines(m); len(marked) != 1 || !strings.Contains(marked[0], "× Fails") {
+	if marked := markedLines(m); len(marked) != 2 || !strings.Contains(marked[1], "× Fails") {
 		t.Fatalf("markers = %v", marked)
 	}
 	press(m, "k", "k") // past Extra, which sorts before Fails
@@ -584,6 +644,19 @@ func TestOpenInEditor(t *testing.T) {
 	if lines[len(lines)-1] != 12 {
 		t.Fatalf("failing line expected from the log, got %v", lines)
 	}
+	// With the log cursor on a deeper stack frame, o opens that frame.
+	fails.Result.StackTrace = "   at Shop.Core.Discount.Percent() in /src/Shop.Core/Discount.cs:line 9\n   at X in /src/Alpha.Tests/UnitTest1.cs:line 12"
+	m.refresh()
+	for i, l := range m.logLines {
+		if strings.Contains(l, "Discount.cs:line 9") {
+			m.logCursor = i
+		}
+	}
+	press(m, "o")
+	if opened[len(opened)-1] != "/src/Shop.Core/Discount.cs" || lines[len(lines)-1] != 9 {
+		t.Fatalf("frame under the cursor expected, got %v %v", opened[len(opened)-1], lines[len(lines)-1])
+	}
+	press(m, "ctrl+k")
 	fails.SetStatus(tree.StatusPassed)
 	press(m, "o")
 	if lines[len(lines)-1] != 7 {

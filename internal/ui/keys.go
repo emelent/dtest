@@ -109,30 +109,36 @@ func (m *Model) handleTreeKey(key string) (bool, tea.Cmd) {
 	return true, nil
 }
 
-// handleLogKey scrolls the log with vim motions.
+// handleLogKey moves the log's cursor line with vim motions; ctrl+e and
+// ctrl+y scroll without moving it.
 func (m *Model) handleLogKey(key string) (bool, tea.Cmd) {
+	page := m.log.Height()
 	switch key {
-	case "j", "down", "ctrl+e":
-		m.log.ScrollDown(1)
-	case "k", "up", "ctrl+y":
-		m.log.ScrollUp(1)
+	case "j", "down":
+		m.moveLog(1)
+	case "k", "up":
+		m.moveLog(-1)
 	case "g":
 		if m.pendingG {
-			m.log.GotoTop()
+			m.moveLog(-len(m.logLines))
 			m.pendingG = false
 		} else {
 			m.pendingG = true
 		}
 	case "G", "end":
-		m.log.GotoBottom()
+		m.moveLog(len(m.logLines))
 	case "ctrl+d", "pgdown":
-		m.log.HalfPageDown()
+		m.moveLog(page / 2)
 	case "ctrl+u", "pgup":
-		m.log.HalfPageUp()
+		m.moveLog(-page / 2)
 	case "ctrl+f":
-		m.log.PageDown()
+		m.moveLog(page)
 	case "ctrl+b":
-		m.log.PageUp()
+		m.moveLog(-page)
+	case "ctrl+e":
+		m.log.ScrollDown(1)
+	case "ctrl+y":
+		m.log.ScrollUp(1)
 	default:
 		return false, nil
 	}

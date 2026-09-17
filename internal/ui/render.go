@@ -56,11 +56,11 @@ func (m *Model) View() tea.View {
 		return tea.NewView("")
 	}
 	g := m.layout()
-	top := lipgloss.JoinVertical(lipgloss.Left, m.paneTitle(m.logTitle(), m.focus == paneLog, m.width), m.log.View())
+	top := lipgloss.JoinVertical(lipgloss.Left, m.paneTitle(m.logTitle(), m.focus == paneLog, m.width, m.logPosition()), m.log.View())
 	if m.help {
-		top = lipgloss.JoinVertical(lipgloss.Left, m.paneTitle("Usage", true, m.width), m.renderHelp(g.logH))
+		top = lipgloss.JoinVertical(lipgloss.Left, m.paneTitle("Usage", true, m.width, ""), m.renderHelp(g.logH))
 	}
-	bottom := lipgloss.JoinVertical(lipgloss.Left, m.paneTitle(m.treeTitle(), m.focus == paneTree, m.width), m.renderBottom(g))
+	bottom := lipgloss.JoinVertical(lipgloss.Left, m.paneTitle(m.treeTitle(), m.focus == paneTree, m.width, ""), m.renderBottom(g))
 	content := lipgloss.JoinVertical(lipgloss.Left, m.renderHeader(), top, bottom)
 	v := tea.NewView(content)
 	v.AltScreen = true
@@ -69,14 +69,27 @@ func (m *Model) View() tea.View {
 	return v
 }
 
-// paneTitle is a ⎯⎯ Title ⎯⎯⎯ line, bright when the pane is focused.
-func (m *Model) paneTitle(title string, focused bool, width int) string {
+// paneTitle is a ⎯⎯ Title ⎯⎯⎯ line, bright when the pane is focused, with
+// an optional note such as the cursor position near the right end.
+func (m *Model) paneTitle(title string, focused bool, width int, note string) string {
 	style := styleDim
 	if focused {
 		style = styleKey
 	}
 	text := rule + rule + " " + title + " "
-	return style.Render(text + strings.Repeat(rule, max(0, width-ansi.StringWidth(text))))
+	tail := rule + rule
+	if note != "" {
+		tail = " " + note + " " + rule + rule
+	}
+	return style.Render(text + strings.Repeat(rule, max(0, width-ansi.StringWidth(text)-ansi.StringWidth(tail))) + tail)
+}
+
+// logPosition is the log cursor's line over the line count, "12/80".
+func (m *Model) logPosition() string {
+	if len(m.logLines) == 0 {
+		return ""
+	}
+	return fmt.Sprintf("%d/%d", m.logCursor+1, len(m.logLines))
 }
 
 func (m *Model) logTitle() string {
@@ -134,7 +147,11 @@ func (m *Model) refreshTree() {
 	m.cursor = clamp(m.cursor, len(m.rows))
 	lines := make([]string, 0, len(m.rows))
 	for i, n := range m.rows {
-		lines = append(lines, ansi.Truncate(m.renderNode(n, i == m.cursor), m.treeView.Width(), "…"))
+		line := ansi.Truncate(m.renderNode(n), m.treeView.Width(), "…")
+		if i == m.cursor {
+			line = highlight(line, m.treeView.Width(), m.focus == paneTree)
+		}
+		lines = append(lines, line)
 	}
 	if len(m.rows) == 0 {
 		lines = append(lines, m.emptyTreeMessage())
@@ -175,8 +192,9 @@ func (m *Model) emptyTreeMessage() string {
 }
 
 // refreshLog shows the results for the node under the tree cursor (or the
-// raw output of its project). Selecting another node starts at the top; a
-// log that is being appended to keeps following its tail.
+// raw output of its project), with the cursor line marked. Selecting
+// another node starts at the top; a log that is being appended to keeps
+// following its tail.
 func (m *Model) refreshLog() {
 	n := m.current()
 	var lines []string
@@ -193,17 +211,33 @@ func (m *Model) refreshLog() {
 	} else {
 		lines = m.renderNodeLog(n)
 	}
-	for i, l := range lines {
-		lines[i] = ansi.Truncate(l, m.log.Width(), "…")
+	changed := n != m.logNode
+	if changed {
+		m.logCursor = 0
 	}
-	sig := strings.Join(lines, "\n")
-	if sig == m.logSig && n == m.logNode {
+	m.logCursor = clamp(m.logCursor, len(lines))
+	// Wrap each line at word boundaries, remembering where each starts;
+	// every row of the cursor line is highlighted.
+	m.logLines, m.logStarts = m.logLines[:0], m.logStarts[:0]
+	var display []string
+	width := max(1, m.log.Width())
+	for i, l := range lines {
+		m.logLines = append(m.logLines, ansi.Strip(l))
+		m.logStarts = append(m.logStarts, len(display))
+		for _, seg := range strings.Split(ansi.Wrap(l, width, ""), "\n") {
+			if i == m.logCursor {
+				seg = highlight(seg, width, m.focus == paneLog)
+			}
+			display = append(display, seg)
+		}
+	}
+	sig := strings.Join(display, "\n")
+	if sig == m.logSig && !changed {
 		return
 	}
 	follow := m.log.AtBottom() || m.log.PastBottom()
-	changed := n != m.logNode
 	m.logSig, m.logNode = sig, n
-	m.log.SetContentLines(lines)
+	m.log.SetContentLines(display)
 	switch {
 	case changed:
 		m.log.GotoTop()
@@ -328,13 +362,19 @@ func buildErrors(log []string) []string {
 	return out
 }
 
-// marker is the cursor glyph, bright when the tree is focused and dim when
-// the log is.
-func (m *Model) marker(focused bool) string {
+// highlight paints the cursor line's background across the full width,
+// brighter in the focused pane. Styled text resets the attributes after
+// each coloured span, so the background is re-applied after every reset to
+// keep the whole row lit while the colours stay.
+func highlight(line string, width int, focused bool) string {
+	bg := bgUnfocused
 	if focused {
-		return styleKey.Render(iconArrow)
+		bg = bgFocused
 	}
-	return styleDim.Render(iconArrow)
+	s := fit(line, width)
+	s = strings.ReplaceAll(s, "\x1b[0m", "\x1b[0m"+bg)
+	s = strings.ReplaceAll(s, "\x1b[m", "\x1b[m"+bg)
+	return bg + s + "\x1b[0m"
 }
 
 // renderBottom draws the tree with the summary right-aligned beside it: the
@@ -357,9 +397,9 @@ func (m *Model) renderBottom(g geometry) string {
 	return lipgloss.JoinHorizontal(lipgloss.Top, tree, "  ", strings.Join(stats, "\n"))
 }
 
-// renderNode draws one tree line: marker, glyph, name and, for groups, the
-// counts in parentheses, then the duration.
-func (m *Model) renderNode(n *tree.Node, selected bool) string {
+// renderNode draws one tree line: glyph, name and, for groups, the counts
+// in parentheses, then the duration.
+func (m *Model) renderNode(n *tree.Node) string {
 	status := n.Status()
 	name := n.Name
 	var tail []string
@@ -377,11 +417,7 @@ func (m *Model) renderNode(n *tree.Node, selected bool) string {
 	if d := n.Duration(); d > 0 || (n.IsLeaf() && n.Result != nil && status != tree.StatusSkipped) {
 		tail = append(tail, styleDim.Render(formatDuration(d)))
 	}
-	marker := " "
-	if selected {
-		marker = m.marker(m.focus == paneTree)
-	}
-	line := marker + " " + strings.Repeat("  ", n.Depth()) + m.treeIcon(n) + " " + name
+	line := "  " + strings.Repeat("  ", n.Depth()) + m.treeIcon(n) + " " + name
 	if len(tail) > 0 {
 		line += " " + strings.Join(tail, " ")
 	}
@@ -602,9 +638,9 @@ type helpRow struct{ keys, desc string }
 
 var helpRows = []helpRow{
 	{"ctrl+j / ctrl+k", "to switch between the log and the tree (tab works too)"},
-	{"j / k", "to move through the tree, or scroll the log"},
+	{"j / k", "to move through the tree, or the lines of the log"},
 	{"gg / G", "to jump to the top / bottom"},
-	{"ctrl+d / ctrl+u", "to move half a page"},
+	{"ctrl+d / ctrl+u", "to move half a page (ctrl+e / ctrl+y scroll the log without moving)"},
 	{"l / h", "to expand / collapse a project, class or theory"},
 	{"enter or r", "to run the selected project, class or test"},
 	{"A", "to run every project"},
@@ -613,7 +649,7 @@ var helpRows = []helpRow{
 	{"a", "to show all tests again (esc does too)"},
 	{"x", "to cancel the running tests"},
 	{"n / N", "to jump to the next / previous failure"},
-	{"o", "to open the selected test in Neovim (a failed test opens at the failing line)"},
+	{"o", "to open in Neovim: a stack frame under the log cursor, else a failed test's failing line, else the declaration"},
 	{"t or /", "to filter the tree by name (enter keeps it, esc clears every filter)"},
 	{"v", "to show the raw dotnet output of the selected project instead"},
 	{"ctrl+r", "to rebuild and list the tests again"},
