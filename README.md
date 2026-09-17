@@ -46,10 +46,12 @@ ctrl+j/k for their own pane movement.
   it. `v` swaps in the raw `dotnet` output of the selected project,
   coloured by kind.
 - **Tests** (bottom) is the tree of projects, classes, methods and theory
-  rows, with vitest-style counts and durations on every group, and vitest's
-  summary block (projects, tests, start time, duration, then the `RUN` /
-  `PASS` / `FAIL` state and key hint) right-aligned beside it. After a run,
-  passing classes fold to one line and failing ones open.
+  rows, with vitest-style counts and durations on every group, and the
+  stats right-aligned beside it: project results, then the test total and
+  the failed, skipped and passed counts stacked, the start time and duration
+  of the last batch of runs, and the key hint. The stats hide unless the
+  tree keeps at least 65% of the width. After a run, passing classes fold
+  to one line and failing ones open.
 
 ## Features
 

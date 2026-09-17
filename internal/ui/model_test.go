@@ -17,12 +17,12 @@ import (
 
 const projA = "/src/Alpha.Tests/Alpha.Tests.csproj"
 
-// newTestModel returns a 120x40 model with one project listed and no
-// dotnet calls made.
+// newTestModel returns a 140x40 model (wide enough for the stats to show)
+// with one project listed and no dotnet calls made.
 func newTestModel(t *testing.T) *Model {
 	t.Helper()
 	m := New(Config{Version: "v1.2.3", Target: "/src/Sample.slnx", Socket: "/tmp/nvim.Sample.sock"})
-	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	m.Update(tea.WindowSizeMsg{Width: 140, Height: 40})
 	p := m.tree.AddProject(projA)
 	m.tree.SetTests(p, []string{
 		"Alpha.Tests.MathTests.Adds",
@@ -140,9 +140,16 @@ func TestLayoutAndNavigation(t *testing.T) {
 	m.refresh()
 	// The log pane is about 70% of the height: header + title + log + title + bottom = 40.
 	g := m.layout()
-	if g.logH < 24 || g.logH > 27 || g.bottomH+g.logH+headerH+2*titleH != 40 || g.statsW == 0 || g.treeW+g.statsW+2 != 120 {
+	if g.logH < 24 || g.logH > 27 || g.bottomH+g.logH+headerH+2*titleH != 40 || g.statsW == 0 || g.treeW+g.statsW+2 != 140 || g.treeW*100 < 140*minTreeShare {
 		t.Fatalf("geometry = %+v", g)
 	}
+	// The stats show only while the tree keeps 65% of the width: at 120
+	// columns the tree would have 120-45 = 75 (62%), so they hide.
+	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
+	if g := m.layout(); g.statsW != 0 || g.treeW != 120 || strings.Contains(view(m), "press ? to show help") {
+		t.Fatalf("120-column geometry = %+v", g)
+	}
+	m.Update(tea.WindowSizeMsg{Width: 140, Height: 40})
 
 	press(m, "j", "l") // expand MathTests
 	if len(m.rows) != 6 || m.current().Name != "MathTests" {
@@ -198,6 +205,27 @@ func TestLayoutAndNavigation(t *testing.T) {
 	}
 	if !strings.Contains(m.View().Content, bgUnfocused) || !strings.Contains(m.View().Content, bgFocused) {
 		t.Fatal("the unfocused pane's cursor is dimmer than the focused one's")
+	}
+}
+
+func TestFitStats(t *testing.T) {
+	block := []string{"state", "", "a", "b", "c", "", "hint"}
+	if got := fitStats(block, 9); len(got) != 9 || got[0] != "" || got[2] != "state" || got[8] != "hint" {
+		t.Errorf("padded = %q", got)
+	}
+	if got := fitStats(block, 5); strings.Join(got, "|") != "state|a|b|c|hint" {
+		t.Errorf("compacted = %q", got)
+	}
+	if got := fitStats(block, 3); strings.Join(got, "|") != "state|a|hint" {
+		t.Errorf("cut = %q", got)
+	}
+	// On a short terminal the state line still shows.
+	m := newTestModel(t)
+	m.Update(tea.WindowSizeMsg{Width: 150, Height: 24})
+	m.building = true
+	m.refresh()
+	if v := view(m); !strings.Contains(v, "Building Sample.slnx…") || !strings.Contains(v, "press q to quit") {
+		t.Fatalf("short terminal should keep the state line and hint:\n%s", v)
 	}
 }
 

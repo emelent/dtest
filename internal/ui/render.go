@@ -14,8 +14,9 @@ import (
 )
 
 const (
-	headerH = 1
-	titleH  = 1 // each pane has a title line
+	headerH      = 1
+	titleH       = 1  // each pane has a title line
+	minTreeShare = 65 // percent of the width the tree must keep for the stats to show
 )
 
 // geometry is the current pane arrangement.
@@ -34,13 +35,15 @@ func (m *Model) layout() geometry {
 	g.logH = max(1, body*7/10)
 	g.bottomH = max(1, body-g.logH)
 	// The block is as wide as its summary lines; the state line on top is
-	// truncated to that, so a long "Running …" label cannot shift the block.
+	// truncated to that, so a long label cannot shift the block. Unless the
+	// tree keeps at least minTreeShare of the width the block is hidden and
+	// the tree gets it all.
 	stats := m.statsLines()
 	for _, l := range stats[1:] {
 		g.statsW = max(g.statsW, ansi.StringWidth(l))
 	}
 	g.treeW = m.width - g.statsW - 2
-	if g.treeW < 30 {
+	if g.treeW*100 < m.width*minTreeShare {
 		g.treeW, g.statsW = m.width, 0
 	}
 	m.log.SetWidth(max(1, m.width))
@@ -384,13 +387,7 @@ func (m *Model) renderBottom(g geometry) string {
 	if g.statsW == 0 {
 		return tree
 	}
-	stats := m.statsLines()
-	// Bottom-aligned: pad above, or keep the last lines when it is taller
-	// than the pane.
-	for len(stats) < g.bottomH {
-		stats = append([]string{""}, stats...)
-	}
-	stats = stats[len(stats)-g.bottomH:]
+	stats := fitStats(m.statsLines(), g.bottomH)
 	for i, l := range stats {
 		stats[i] = fit(ansi.Truncate(l, g.statsW, "…"), g.statsW)
 	}
@@ -529,6 +526,30 @@ func (m *Model) renderHeader() string {
 		line += "  " + styleDim.Render(m.cfg.Version)
 	}
 	return fit(line, m.width)
+}
+
+// fitStats makes the stats block exactly height rows: bottom-aligned when
+// there is room; when there is not, the blank spacers go first, then rows
+// from the bottom, so the state line (where errors show) and the hint
+// survive on a short terminal.
+func fitStats(stats []string, height int) []string {
+	if len(stats) > height {
+		var compact []string
+		for _, l := range stats {
+			if l != "" {
+				compact = append(compact, l)
+			}
+		}
+		stats = compact
+	}
+	if len(stats) > height && height > 0 {
+		hint := stats[len(stats)-1]
+		stats = append(stats[:height-1:height-1], hint)
+	}
+	for len(stats) < height {
+		stats = append([]string{""}, stats...)
+	}
+	return stats
 }
 
 // statsLines is the block beside the tree: the state line, then the
