@@ -120,10 +120,13 @@ func TestNavigationAndFolding(t *testing.T) {
 		t.Fatalf("ctrl+u -> %d", m.cursor)
 	}
 	v := view(m)
-	for _, want := range []string{"DTEST", "Alpha.Tests", "(5 tests)", "MathTests (4 tests)", "Test Projects", "Tests", "Start at", "Duration", "5 tests ready.", "press ? for help"} {
+	for _, want := range []string{"DTEST", "Alpha.Tests", "(5 tests)", "MathTests (4 tests)", "Ready. 5 tests in 1 projects.", "press ? to show help, press q to quit"} {
 		if !strings.Contains(v, want) {
 			t.Errorf("view should contain %q:\n%s", want, v)
 		}
+	}
+	if strings.Contains(v, "Start at") {
+		t.Error("summary should be blank before the first run")
 	}
 }
 
@@ -137,7 +140,7 @@ func TestFilter(t *testing.T) {
 		t.Fatalf("filtered rows = %d", len(m.rows))
 	}
 	v := view(m)
-	if !strings.Contains(v, "filter: wai") || strings.Contains(v, "\t") {
+	if !strings.Contains(v, "Filter by test or project name › wai") || strings.Contains(v, "\t") {
 		t.Fatalf("status should show the filter and rows must not contain tabs:\n%s", v)
 	}
 	m.handleKey(tea.KeyPressMsg{Code: 'T', Text: "T", Mod: tea.ModShift})
@@ -246,8 +249,9 @@ func TestRunFlow(t *testing.T) {
 		"❯ /src/Alpha.Tests/UnitTest1.cs:12",
 		"Test Projects  1 failed (1)",
 		"Tests  1 failed | 3 passed | 1 skipped | 1 not run (6)",
-		"Duration  2m34s",
+		"Duration  2m34s (tests 0.033s)",
 		"FAIL  Tests failed.",
+		"press ? to show help, press q to quit",
 	} {
 		if !strings.Contains(v, want) {
 			t.Errorf("view should contain %q:\n%s", want, v)
@@ -330,7 +334,7 @@ func TestOutputToggleAndHelp(t *testing.T) {
 		t.Fatal("v should hide the output again")
 	}
 	press(m, "?")
-	if v := view(m); !strings.Contains(v, "press f") || !strings.Contains(v, "rerun only the failed tests") || !strings.Contains(v, "/tmp/nvim.Sample.sock") {
+	if v := view(m); !strings.Contains(v, "Usage") || !strings.Contains(v, "press f") || !strings.Contains(v, "rerun only the failed tests") || !strings.Contains(v, "/tmp/nvim.Sample.sock") || strings.Contains(v, "Ready.") {
 		t.Fatalf("help:\n%s", v)
 	}
 	press(m, "j")

@@ -28,8 +28,10 @@ Actual:   428
  Test Projects  1 failed | 1 passed (2)
          Tests  1 failed | 46 passed | 2 skipped (49)
       Start at  20:51:13
-      Duration  3.8s
-  FAIL  Tests failed.  press ? for help, q to quit
+      Duration  3.8s (tests 2.4s)
+
+  FAIL  Tests failed.
+       press ? to show help, press q to quit
 ```
 
 ## Features
@@ -39,7 +41,7 @@ Actual:   428
 - Live status while tests run: a spinner on the running tests, ✓ × ↓ as each result comes in, counts and durations on every parent
 - After a run, passing classes fold to one line and failing ones open, as vitest does
 - A "Failed Tests" section with each failure's message (expected values green, actual values red) and the source location from its stack trace
-- Fixed summary of projects, tests, start time and duration
+- Vitest's closing block: a summary of projects, tests, start time and duration, then a `RUN` / `PASS` / `FAIL` line with `press ? to show help, press q to quit`; `?` shows the usage list in its place
 - The raw `dotnet` output stays hidden; `v` shows it, coloured by kind
 - Open the selected test in Neovim, either a running instance (via the socket in `$nvim_sock`) or one launched in place; a failure entry opens the failing line
 

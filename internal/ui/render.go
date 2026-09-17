@@ -15,15 +15,23 @@ import (
 )
 
 const (
-	headerH  = 1
-	summaryH = 5 // blank line + four summary rows
-	statusH  = 1
+	headerH = 1
+	bottomH = 8 // blank, four summary rows, blank, status, hint
 )
+
+// bottomHeight is the height of the block under the report: the summary
+// and status, or the usage list while help is shown.
+func (m *Model) bottomHeight() int {
+	if m.help {
+		return len(helpRows) + 5
+	}
+	return bottomH
+}
 
 // layout sizes the report viewport to the window.
 func (m *Model) layout() {
 	m.report.SetWidth(max(1, m.width))
-	m.report.SetHeight(max(1, m.height-headerH-summaryH-statusH))
+	m.report.SetHeight(max(1, m.height-headerH-m.bottomHeight()))
 }
 
 // View draws the whole screen.
@@ -31,11 +39,12 @@ func (m *Model) View() tea.View {
 	if m.width == 0 {
 		return tea.NewView("")
 	}
-	body := m.report.View()
+	m.layout()
+	bottom := m.renderSummary() + "\n" + m.renderStatus()
 	if m.help {
-		body = m.renderHelp()
+		bottom = m.renderHelp()
 	}
-	content := lipgloss.JoinVertical(lipgloss.Left, m.renderHeader(), body, m.renderSummary(), m.renderStatus())
+	content := lipgloss.JoinVertical(lipgloss.Left, m.renderHeader(), m.report.View(), bottom)
 	v := tea.NewView(content)
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
@@ -255,8 +264,12 @@ func (m *Model) renderHeader() string {
 }
 
 // renderSummary is the fixed block at the bottom, as vitest prints after a
-// run: projects, tests, start time and duration.
+// run: projects, tests, start time and duration. Before the first run it is
+// blank.
 func (m *Model) renderSummary() string {
+	if m.batchStart.IsZero() {
+		return strings.Repeat("\n", 4)
+	}
 	var pc tree.Counts
 	for _, p := range m.tree.Projects {
 		pc.Total++
@@ -272,40 +285,40 @@ func (m *Model) renderSummary() string {
 		}
 	}
 	tc := m.tree.Counts()
-	start, dur := styleDim.Render("–"), styleDim.Render("–")
-	if !m.batchStart.IsZero() {
-		start = m.batchStart.Format("15:04:05")
-		end := m.batchEnd
-		if end.IsZero() {
-			end = now()
-		}
-		dur = formatDuration(end.Sub(m.batchStart))
+	end := m.batchEnd
+	if end.IsZero() {
+		end = now()
 	}
-	label := func(s string) string { return styleBold.Render(fmt.Sprintf("%14s", s)) }
+	var tests time.Duration
+	for _, p := range m.tree.Projects {
+		tests += p.Duration()
+	}
+	dur := formatDuration(end.Sub(m.batchStart)) + styleDim.Render(fmt.Sprintf(" (tests %s)", formatDuration(tests)))
+	label := func(s string) string { return styleDim.Render(fmt.Sprintf("%14s", s)) }
 	return strings.Join([]string{
 		"",
 		label("Test Projects") + "  " + summaryCounts(pc),
 		label("Tests") + "  " + summaryCounts(tc),
-		label("Start at") + "  " + start,
+		label("Start at") + "  " + m.batchStart.Format("15:04:05"),
 		label("Duration") + "  " + dur,
 	}, "\n")
 }
 
 // summaryCounts is "1 failed | 1 passed | 2 skipped (4)", listing only the
-// non-zero groups.
+// non-zero groups, each bold in its colour as vitest prints them.
 func summaryCounts(c tree.Counts) string {
 	var parts []string
 	if c.Running > 0 {
-		parts = append(parts, styleRunning.Render(fmt.Sprintf("%d running", c.Running)))
+		parts = append(parts, styleRunning.Bold(true).Render(fmt.Sprintf("%d running", c.Running)))
 	}
 	if c.Failed > 0 {
 		parts = append(parts, styleFailed.Bold(true).Render(fmt.Sprintf("%d failed", c.Failed)))
 	}
 	if c.Passed > 0 {
-		parts = append(parts, stylePassed.Render(fmt.Sprintf("%d passed", c.Passed)))
+		parts = append(parts, stylePassed.Bold(true).Render(fmt.Sprintf("%d passed", c.Passed)))
 	}
 	if c.Skipped > 0 {
-		parts = append(parts, styleSkipped.Render(fmt.Sprintf("%d skipped", c.Skipped)))
+		parts = append(parts, styleSkipped.Bold(true).Render(fmt.Sprintf("%d skipped", c.Skipped)))
 	}
 	if rest := c.Total - c.Running - c.Failed - c.Passed - c.Skipped; rest > 0 {
 		parts = append(parts, styleDim.Render(fmt.Sprintf("%d not run", rest)))
@@ -316,12 +329,12 @@ func summaryCounts(c tree.Counts) string {
 	return strings.Join(parts, styleDim.Render(" | ")) + styleDim.Render(fmt.Sprintf(" (%d)", c.Total))
 }
 
+// renderStatus is the two closing lines, as vitest prints them: a badge
+// with the state, then "press ? to show help, press q to quit" aligned
+// under the text. While filtering the second line is the prompt.
 func (m *Model) renderStatus() string {
-	hint := styleDim.Render("  press ? for help, q to quit")
 	var line string
 	switch {
-	case m.filtering:
-		line = " " + styleKey.Render(iconArrow) + " filter: " + m.query + "▏" + styleDim.Render("  enter keeps, esc clears")
 	case m.status != "":
 		badge := badgeInfo.Render("INFO")
 		if m.statusErr {
@@ -329,22 +342,27 @@ func (m *Model) renderStatus() string {
 		}
 		line = " " + badge + " " + m.status
 	case m.building:
-		line = " " + badgeRun.Render("RUN") + " Building " + filepath.Base(m.cfg.Target) + "…" + hint
+		line = " " + badgeRun.Render("RUN") + " Building " + filepath.Base(m.cfg.Target) + "…"
 	case m.loading > 0:
-		line = " " + badgeRun.Render("RUN") + " Listing tests…" + hint
+		line = " " + badgeRun.Render("RUN") + " Listing tests…"
 	case m.run != nil:
-		line = " " + badgeRun.Render("RUN") + " Running " + m.run.req.label + "…" + hint
+		line = " " + badgeRun.Render("RUN") + " Running " + m.run.req.label + "…"
 	case m.runsDone && m.tree.Counts().Failed > 0:
-		line = " " + badgeFail.Render("FAIL") + " Tests failed." + hint
+		line = " " + badgeFail.Render("FAIL") + " Tests failed."
 	case m.runsDone:
-		line = " " + badgePass.Render("PASS") + " All tests passed." + hint
+		line = " " + badgePass.Render("PASS") + " Tests passed."
 	default:
-		line = " " + badgeInfo.Render("DTEST") + fmt.Sprintf(" %d tests ready.", m.tree.Counts().Total) + hint
+		c := m.tree.Counts()
+		line = " " + badgeInfo.Render("DTEST") + fmt.Sprintf(" Ready. %d tests in %d projects.", c.Total, len(m.tree.Projects))
 	}
-	if m.query != "" && !m.filtering {
-		line += styleDim.Render("  filter: ") + m.query
+	hint := strings.Repeat(" ", 7) + styleDim.Render("press ? to show help, press q to quit")
+	switch {
+	case m.filtering:
+		hint = " " + styleKey.Render("?") + " Filter by test or project name " + styleDim.Render("›") + " " + m.query + "▏"
+	case m.query != "":
+		hint += styleDim.Render("  filter: " + m.query + " (esc clears)")
 	}
-	return fit(line, m.width)
+	return "\n" + fit(line, m.width) + "\n" + fit(hint, m.width)
 }
 
 // Help.
@@ -368,23 +386,21 @@ var helpRows = []helpRow{
 	{"q", "to quit"},
 }
 
+// renderHelp is vitest's "Watch Usage" list, drawn in place of the summary
+// and status; any key closes it.
 func (m *Model) renderHelp() string {
 	var b strings.Builder
-	b.WriteString("\n " + styleBold.Render("Keys") + "\n")
+	b.WriteString("\n " + styleBold.Render("Usage") + "\n")
 	for _, r := range helpRows {
 		fmt.Fprintf(&b, " %s %s %s\n", styleDim.Render("press"), styleKey.Render(fmt.Sprintf("%-16s", r.keys)), r.desc)
 	}
-	b.WriteString("\n " + styleBold.Render("Neovim") + "\n")
+	nvim := "o sends the file and line to the Neovim listening on " + m.socket + " (from $nvim_sock or --nvim-socket)"
 	if m.socket == "" {
-		b.WriteString(" $nvim_sock is not set, so o opens nvim in this terminal and dtest resumes when it exits.\n")
-		b.WriteString(" Set it (or pass --nvim-socket) to the socket of a Neovim started with nvim --listen <socket>.\n")
-	} else {
-		fmt.Fprintf(&b, " o sends the file and line to the Neovim listening on %s\n", m.socket)
-		b.WriteString(" (from $nvim_sock or --nvim-socket). Inside tmux the window named \"code\" is selected too.\n")
+		nvim = "$nvim_sock is not set, so o opens nvim in this terminal; set it to the socket of a Neovim started with --listen"
 	}
-	b.WriteString("\n" + styleDim.Render(" Any key closes this help."))
-	h := m.report.Height()
-	return lipgloss.NewStyle().Width(m.width).Height(h).MaxHeight(h).Render(b.String())
+	b.WriteString("\n " + styleDim.Render(nvim) + "\n")
+	b.WriteString(" " + styleDim.Render("press any key to close this help"))
+	return b.String()
 }
 
 // Output colouring.
