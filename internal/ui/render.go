@@ -201,7 +201,7 @@ func (m *Model) refreshLog() {
 
 // renderNodeLog is the minimal log for a node: build errors first, then
 // for a test its result, message, stack trace and output; for a group its
-// counts and every failure beneath it.
+// passed / failed / skipped tally and every failure beneath it.
 func (m *Model) renderNodeLog(n *tree.Node) []string {
 	var lines []string
 	if errs := buildErrors(m.logs[buildLogKey]); len(errs) > 0 {
@@ -219,11 +219,12 @@ func (m *Model) renderNodeLog(n *tree.Node) []string {
 		return append(lines, m.renderLeafLog(n)...)
 	}
 	c := n.Counts()
-	head := "  " + m.statusIcon(n.Status()) + " " + styleBold.Render(breadcrumb(n)) + " " + m.renderCounts(c)
+	head := "  " + m.statusIcon(n.Status()) + " " + styleBold.Render(breadcrumb(n))
 	if d := n.Duration(); d > 0 {
 		head += " " + styleDim.Render(formatDuration(d))
 	}
-	lines = append(lines, head)
+	// Then the section's tally, as the summary prints it.
+	lines = append(lines, head, "    "+strings.Join(summaryParts(c), styleDim.Render(" | ")))
 	var failed []*tree.Node
 	for _, l := range n.Leaves() {
 		if l.Status() == tree.StatusFailed && l.Result != nil {
@@ -331,14 +332,16 @@ func (m *Model) renderBottom(g geometry) string {
 		return tree
 	}
 	stats := m.statsLines()
+	// Bottom-aligned: pad above, or keep the last lines when it is taller
+	// than the pane.
 	for len(stats) < g.bottomH {
-		stats = append(stats, "")
+		stats = append([]string{""}, stats...)
 	}
+	stats = stats[len(stats)-g.bottomH:]
 	for i, l := range stats {
 		stats[i] = fit(l, g.statsW)
 	}
-	right := strings.Join(stats[:g.bottomH], "\n")
-	return lipgloss.JoinHorizontal(lipgloss.Top, tree, "  ", right)
+	return lipgloss.JoinHorizontal(lipgloss.Top, tree, "  ", strings.Join(stats, "\n"))
 }
 
 // renderNode draws one tree line: marker, glyph, name and, for groups, the
@@ -546,8 +549,10 @@ func summaryParts(c tree.Counts) []string {
 }
 
 // renderStatusLines is vitest's closing pair: a badge with the state, then
-// "press ? to show help, press q to quit" aligned under the text.
+// "press ? to show help, press q to quit" aligned under the text. While
+// dotnet is busy the header already says so, so only the hint remains.
 func (m *Model) renderStatusLines() []string {
+	hint := strings.Repeat(" ", 7) + styleDim.Render("press ? to show help, press q to quit")
 	var line string
 	switch {
 	case m.status != "":
@@ -556,12 +561,8 @@ func (m *Model) renderStatusLines() []string {
 			badge = badgeFail.Render("FAIL")
 		}
 		line = " " + badge + " " + m.status
-	case m.building:
-		line = " " + badgeRun.Render("RUN") + " Building " + filepath.Base(m.cfg.Target) + "…"
-	case m.loading > 0:
-		line = " " + badgeRun.Render("RUN") + " Listing tests…"
-	case m.run != nil:
-		line = " " + badgeRun.Render("RUN") + " Running " + m.run.req.label + "…"
+	case m.building, m.loading > 0, m.run != nil:
+		return []string{hint}
 	case m.runsDone && m.tree.Counts().Failed > 0:
 		line = " " + badgeFail.Render("FAIL") + " Tests failed."
 	case m.runsDone:
@@ -570,7 +571,7 @@ func (m *Model) renderStatusLines() []string {
 		c := m.tree.Counts()
 		line = " " + badgeInfo.Render("DTEST") + fmt.Sprintf(" Ready. %d tests in %d projects.", c.Total, len(m.tree.Projects))
 	}
-	return []string{line, strings.Repeat(" ", 7) + styleDim.Render("press ? to show help, press q to quit")}
+	return []string{line, hint}
 }
 
 // Help.
@@ -578,7 +579,7 @@ func (m *Model) renderStatusLines() []string {
 type helpRow struct{ keys, desc string }
 
 var helpRows = []helpRow{
-	{"ctrl+j / ctrl+k", "to switch between the log and the tree"},
+	{"ctrl+j / ctrl+k", "to switch between the log and the tree (tab works too)"},
 	{"j / k", "to move through the tree, or scroll the log"},
 	{"gg / G", "to jump to the top / bottom"},
 	{"ctrl+d / ctrl+u", "to move half a page"},

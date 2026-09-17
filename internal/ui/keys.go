@@ -26,8 +26,9 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		defer func() { m.pendingG = false }()
 	}
 	switch key {
-	case "ctrl+j", "ctrl+k":
-		// Two panes, so either direction is the other pane.
+	case "ctrl+j", "ctrl+k", "tab", "shift+tab":
+		// Two panes, so either direction is the other pane. tab is for
+		// terminals or tmux setups that keep ctrl+j/k for themselves.
 		if m.focus == paneLog {
 			m.focus = paneTree
 		} else {

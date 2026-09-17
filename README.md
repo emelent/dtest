@@ -31,12 +31,15 @@ Actual:   428
 
 ## Layout
 
-Two panes; `ctrl+j` and `ctrl+k` switch between them, wrapping around.
+Two panes; `ctrl+j` and `ctrl+k` switch between them, wrapping around, and
+so do `tab` and `shift+tab` for terminals or tmux setups that reserve
+ctrl+j/k for their own pane movement.
 
 - **Log** (top, about 70% of the height) shows the results of whatever the
   tree selects. For a test: its verdict, message (expected values green,
   actual values red), failing location, stack trace and captured output.
-  For a project, class or theory: its counts and every failure beneath it.
+  For a project, class or theory: its passed / failed / skipped tally and
+  every failure beneath it.
   Build errors show first. With the log focused, `j`/`k`, `gg`/`G`,
   `ctrl+d`/`ctrl+u` scroll it. `v` swaps in the raw `dotnet` output of the
   selected project, coloured by kind.
@@ -94,7 +97,7 @@ Press `?` in the app for this list.
 
 | Key | Action |
 | --- | --- |
-| `ctrl+j` / `ctrl+k` | Switch between the log and the tree |
+| `ctrl+j` / `ctrl+k`, `tab` | Switch between the log and the tree |
 | `j` / `k`, `↓` / `↑` | Move through the tree, or scroll the log |
 | `gg` / `G` | Top / bottom |
 | `ctrl+d` / `ctrl+u` | Half page |

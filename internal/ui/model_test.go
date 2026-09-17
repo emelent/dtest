@@ -88,7 +88,7 @@ func TestLayoutAndNavigation(t *testing.T) {
 		t.Fatalf("rows = %d", len(m.rows))
 	}
 	v := view(m)
-	containsAll(t, v, "DTEST", "⎯⎯ Log  Alpha.Tests ⎯", "⎯⎯ Tests ⎯", "· Alpha.Tests (5 tests)", "Not run yet",
+	containsAll(t, v, "DTEST", "⎯⎯ Log  Alpha.Tests ⎯", "⎯⎯ Tests ⎯", "· Alpha.Tests (5 tests)", "5 not run (5)", "Not run yet",
 		"Ready. 5 tests in 1 projects.", "press ? to show help, press q to quit")
 	if strings.Contains(v, "Start at") || strings.Contains(v, "Summary") || strings.Contains(v, "│") {
 		t.Errorf("one bottom pane, no summary block before the first run:\n%s", v)
@@ -102,6 +102,11 @@ func TestLayoutAndNavigation(t *testing.T) {
 	}
 	if strings.Contains(v, "(5 tests) 0.000s") {
 		t.Error("unrun groups show no duration")
+	}
+	// The summary block is bottom-aligned: the hint is the last line.
+	lines := strings.Split(strings.TrimRight(v, "\n"), "\n")
+	if last := lines[len(lines)-1]; !strings.HasSuffix(last, "press q to quit") {
+		t.Errorf("last line should be the hint, got %q", last)
 	}
 	// The log pane is about 70% of the height: header + title + log + title + bottom = 40.
 	g := m.layout()
@@ -166,6 +171,14 @@ func TestPaneFocusAndLogScroll(t *testing.T) {
 	press(m, "ctrl+j", "ctrl+j")
 	if m.focus != paneTree {
 		t.Fatal("ctrl+j wraps too")
+	}
+	press(m, "tab")
+	if m.focus != paneLog || !strings.Contains(view(m), "⎯⎯ Log") {
+		t.Fatal("tab switches panes too")
+	}
+	m.handleKey(tea.KeyPressMsg{Code: tea.KeyTab, Mod: tea.ModShift})
+	if m.focus != paneTree {
+		t.Fatal("shift+tab switches back")
 	}
 	// Give the log more lines than fit and scroll it from the log pane.
 	fails := m.tree.Lookup(m.tree.Projects[0], "Alpha.Tests.MathTests.Fails")
@@ -266,7 +279,11 @@ func TestRunFlow(t *testing.T) {
 	if class.Status() != tree.StatusRunning || class.Counts().Running != 4 {
 		t.Fatalf("class should be running: %+v", class.Counts())
 	}
-	containsAll(t, view(m), "RUN", "Alpha.Tests › MathTests", "4 running", "19:10:48", "Running Alpha.Tests › MathTests…")
+	v := view(m)
+	containsAll(t, v, "RUN", "Alpha.Tests › MathTests", "4 running", "19:10:48")
+	if strings.Contains(v, "Running Alpha.Tests") {
+		t.Error("the bottom pane must not repeat the header's RUN line")
+	}
 	f.emit(dotnet.LineEvent{Text: "  Starting: Alpha.Tests"})
 	f.emit(dotnet.ResultEvent{Result: dotnet.Result{Name: "Alpha.Tests.MathTests.Adds", Outcome: dotnet.OutcomePassed, Duration: 32 * time.Millisecond}})
 	for i := 0; i < 2; i++ {
@@ -296,10 +313,10 @@ func TestRunFlow(t *testing.T) {
 	}
 	// The cursor is on MathTests, so the log aggregates the class: its
 	// counts and every failure beneath it, without stack traces.
-	v := view(m)
+	v = view(m)
 	containsAll(t, v,
 		"⎯⎯ Log  Alpha.Tests › MathTests ⎯",
-		"× Alpha.Tests › MathTests (5 tests | 1 failed | 1 skipped)",
+		"× Alpha.Tests › MathTests 0.033s",
 		"FAIL  Alpha.Tests › MathTests › Fails 0.001s",
 		"Expected: 5",
 		"Actual:   4",
@@ -316,6 +333,15 @@ func TestRunFlow(t *testing.T) {
 	}
 	if strings.Contains(v, "Stack trace") {
 		t.Error("a group's log leaves the stack traces out")
+	}
+	// The line under the section header is its tally.
+	vlines := strings.Split(v, "\n")
+	for i, l := range vlines {
+		if strings.Contains(l, "× Alpha.Tests › MathTests 0.033s") {
+			if !strings.Contains(vlines[i+1], "1 failed | 3 passed | 1 skipped (5)") {
+				t.Errorf("tally line = %q", vlines[i+1])
+			}
+		}
 	}
 	// n selects the failed test; its own log adds the stack trace. A passed
 	// test shows its verdict.
