@@ -16,7 +16,7 @@ import (
 const (
 	headerH = 1
 	titleH  = 1 // each pane has a title line
-	footerH = 1 // the status and summary line along the bottom of the screen
+	footerH = 2 // what the last batch was, then how it went, along the bottom
 )
 
 // geometry is the current pane arrangement.
@@ -656,22 +656,24 @@ func (m *Model) renderHeader() string {
 	return fitLine(line, styleDim.Render("press "+keyFor(actHelp)+" for help"), m.width)
 }
 
-// renderFooter is the last line of the screen: what dtest is doing or has
-// to say and, the rest of the time, how the last batch of runs went.
+// renderFooter is the last two lines of the screen: what the last batch of
+// runs was, or what dtest is doing or has to say instead, and under it how
+// that batch went. A message takes only the first line, so it never hides
+// the results it is usually about.
 func (m *Model) renderFooter() string {
-	left := m.stateLine()
-	if left == "" {
-		left = m.summary()
+	head := m.stateLine()
+	if head == "" {
+		head = m.summaryHead()
 	}
-	return fit(" "+left, m.width)
+	return fit(" "+head, m.width) + "\n" + fit(" "+m.summaryOutcomes(), m.width)
 }
 
-// summary is how the tests of the last batch of runs are going: what has
-// been run of it so far and how that went. It keeps one shape from the
-// first result to the last, so the line settles rather than changing form
-// when the batch ends. What the solution holds is not here; the root of the
-// tree carries it.
-func (m *Model) summary() string {
+// summaryHead is what the last batch of runs was: how much of it has
+// reported so far, how long it has been going and when it started. It
+// keeps one shape from the first result to the last, so the line settles
+// rather than changing form when the batch ends. What the solution holds is
+// not here; the root of the tree carries it.
+func (m *Model) summaryHead() string {
 	if m.batchStart.IsZero() {
 		return styleDim.Render("nothing run yet")
 	}
@@ -679,10 +681,17 @@ func (m *Model) summary() string {
 	done := ran.Failed + ran.Passed + ran.Skipped
 	// The clock time is a footnote, so it stays grey; how long the tests
 	// took is worth a glance, so it gets a quiet cyan.
-	head := styleDim.Render("Ran "+testCount(done)+" in ") +
+	return styleDim.Render("Ran "+testCount(done)+" in ") +
 		styleElapsed.Render(formatDuration(m.batchDuration())) +
 		styleDim.Render(" at "+m.batchStart.Format("15:04:05"))
-	return head + styleDim.Render("  ·  ") + strings.Join(outcomeParts(ran), styleDim.Render(" | "))
+}
+
+// summaryOutcomes is how the batch went, counted in as results land.
+func (m *Model) summaryOutcomes() string {
+	if m.batchStart.IsZero() {
+		return ""
+	}
+	return strings.Join(outcomeParts(m.batchCounts()), styleDim.Render(" | "))
 }
 
 // outcomeParts is the three outcomes of a tally, each bold in its colour,

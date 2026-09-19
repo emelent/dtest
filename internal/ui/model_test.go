@@ -94,9 +94,15 @@ func markedLines(m *Model) []string {
 	return out
 }
 
-// footerRow is the last line of the screen, as plain text: what dtest is
-// doing, or the summary of the last batch of runs.
-func footerRow(m *Model) string { return strings.TrimRight(ansi.Strip(m.renderFooter()), " ") }
+// footerRow is the footer as plain text: what the last batch of runs was,
+// a newline, then how it went.
+func footerRow(m *Model) string {
+	var rows []string
+	for _, l := range strings.Split(ansi.Strip(m.renderFooter()), "\n") {
+		rows = append(rows, strings.TrimRight(l, " "))
+	}
+	return strings.Join(rows, "\n")
+}
 
 // clipboardOf reports the text a command would put on the clipboard.
 // bubbletea carries it in an unexported message whose underlying type is a
@@ -161,16 +167,17 @@ func TestLayoutAndNavigation(t *testing.T) {
 	if !strings.Contains(lines[title+1], "▾ Sample") {
 		t.Errorf("the root should follow the title, got %q", lines[title+1])
 	}
-	if got := strings.TrimRight(lines[len(lines)-1], " "); got != footerRow(m) {
-		t.Errorf("footer = %q", got)
+	last := strings.Join(lines[len(lines)-footerH:], "\n")
+	if got := footerRow(m); !strings.Contains(strings.ReplaceAll(last, " ", ""), strings.ReplaceAll(got, " ", "")) {
+		t.Errorf("footer = %q, screen has %q", got, last)
 	}
 	// The hint rides with the title at the top, at its far right, not with
 	// the run summary.
 	if !strings.HasSuffix(strings.TrimRight(lines[0], " "), "press ? for help") {
 		t.Errorf("header = %q", strings.TrimRight(lines[0], " "))
 	}
-	if strings.Contains(lines[len(lines)-1], "press ?") {
-		t.Errorf("the footer should be free of it: %q", lines[len(lines)-1])
+	if strings.Contains(last, "press ?") {
+		t.Errorf("the footer should be free of it: %q", last)
 	}
 	// What dtest is doing takes the footer while it is doing it.
 	m.building = true
@@ -430,7 +437,7 @@ func TestRunFlow(t *testing.T) {
 	}
 	v := view(m)
 	containsAll(t, v, "(5 tests | 4 running)")
-	if got := footerRow(m); !strings.Contains(got, "Ran 0 tests in 0.000s at 19:10:48  ·  0 failed | 0 passed | 0 skipped") {
+	if got := footerRow(m); got != " Ran 0 tests in 0.000s at 19:10:48\n 0 failed | 0 passed | 0 skipped" {
 		t.Errorf("a run in flight keeps the same shape: %q", got)
 	}
 	// The timer runs on its own, without waiting for a result to land.
@@ -503,8 +510,9 @@ func TestRunFlow(t *testing.T) {
 		"× Fails 0.001s",
 		"▸ Theory (2 tests | 1 skipped)",
 		// The clock ran on for 2m34s between starting and finishing, and
-		// that is what the footer reports.
-		"Ran 5 tests in 2m34s at 19:10:48  ·  1 failed | 3 passed | 1 skipped",
+		// that is what the footer reports, with the outcomes under it.
+		"Ran 5 tests in 2m34s at 19:10:48",
+		"1 failed | 3 passed | 1 skipped",
 	)
 	if strings.Contains(v, "Tests failed.") || strings.Contains(v, "Tests passed.") {
 		t.Error("no result line in the stats")
@@ -902,12 +910,14 @@ func TestSummaryCountsLastRun(t *testing.T) {
 // the screen; the rest of the time that line carries the run summary.
 func TestFooterLine(t *testing.T) {
 	m := newTestModel(t)
+	// The message takes the footer's first line; the outcomes keep the one
+	// under it.
 	last := func() string {
 		lines := strings.Split(view(m), "\n")
-		return strings.TrimRight(lines[len(lines)-1], " ")
+		return strings.TrimRight(lines[len(lines)-footerH], " ")
 	}
-	if !strings.Contains(last(), "nothing run yet") || last() != footerRow(m) {
-		t.Errorf("idle footer = %q", last())
+	if !strings.Contains(last(), "nothing run yet") || !strings.HasPrefix(footerRow(m), last()) {
+		t.Errorf("idle footer = %q of %q", last(), footerRow(m))
 	}
 	m.building = true
 	m.refresh()
@@ -935,6 +945,16 @@ func TestFooterLine(t *testing.T) {
 	m.refresh()
 	if !strings.Contains(last(), "nothing run yet") {
 		t.Errorf("the summary comes back: %q", last())
+	}
+	// A message never hides the outcomes: they stay on the line under it.
+	f := stubRun(t)
+	press(m, "A")
+	finishRun(t, m, f, dotnet.Result{Name: "Alpha.Tests.MathTests.Fails", Outcome: dotnet.OutcomeFailed, Message: "boom"})
+	m.status, m.statusErr = "Alpha.Tests: dotnet test failed", true
+	m.refresh()
+	rows := strings.Split(footerRow(m), "\n")
+	if len(rows) != 2 || !strings.Contains(rows[0], "FAIL") || !strings.Contains(rows[1], "1 failed") {
+		t.Errorf("footer while a message shows = %q", rows)
 	}
 }
 
@@ -983,7 +1003,7 @@ func treeRows(m *Model) []string {
 		}
 	}
 	var out []string
-	for _, l := range lines[start : len(lines)-1] { // the last line is the footer
+	for _, l := range lines[start : len(lines)-footerH] { // the footer is last
 		if l = strings.TrimRight(ansi.Truncate(l, m.treeView.Width(), ""), " "); l != "" {
 			out = append(out, strings.TrimPrefix(l, "  "))
 		}
@@ -1178,7 +1198,7 @@ func TestSummaryLiveThenFinal(t *testing.T) {
 
 	press(m, "A")
 	<-f.started
-	if got := footerRow(m); !strings.Contains(got, "Ran 0 tests in 0.000s at 21:36:37  ·  0 failed | 0 passed | 0 skipped") {
+	if got := footerRow(m); got != " Ran 0 tests in 0.000s at 21:36:37\n 0 failed | 0 passed | 0 skipped" {
 		t.Errorf("nothing reported yet: %q", got)
 	}
 	// One result lands, and the footer moves with it.
@@ -1186,13 +1206,13 @@ func TestSummaryLiveThenFinal(t *testing.T) {
 	f.emit(dotnet.ResultEvent{Result: dotnet.Result{
 		Name: "Alpha.Tests.MathTests.Adds", Outcome: dotnet.OutcomePassed, Duration: time.Millisecond}})
 	m.Update(<-m.runEvents())
-	if got := footerRow(m); !strings.Contains(got, "Ran 1 test in 2.3s at 21:36:37  ·  0 failed | 1 passed | 0 skipped") {
+	if got := footerRow(m); got != " Ran 1 test in 2.3s at 21:36:37\n 0 failed | 1 passed | 0 skipped" {
 		t.Errorf("mid-run summary = %q", got)
 	}
 	f.emit(dotnet.DoneEvent{Results: []dotnet.Result{{
 		Name: "Alpha.Tests.MathTests.Adds", Outcome: dotnet.OutcomePassed, Duration: time.Millisecond}}})
 	m.Update(<-m.runEvents())
-	if got := footerRow(m); !strings.Contains(got, "Ran 1 test in 2.3s at 21:36:37  ·  0 failed | 1 passed | 0 skipped") {
+	if got := footerRow(m); got != " Ran 1 test in 2.3s at 21:36:37\n 0 failed | 1 passed | 0 skipped" {
 		t.Errorf("the finished line reads the same: %q", got)
 	}
 	// The timer stopped with the batch: it does not run on afterwards.

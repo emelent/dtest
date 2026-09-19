@@ -29,7 +29,8 @@ Actual:   428
   │  │  └─ ✓ UnderLimit_Passes 0.001s
   │  └─ ▸ Middleware.AuthMiddlewareTests (5 tests) 0.004s
   └─ ▸ Shop.Core.Tests (33 tests | 1 skipped) 1.2s
- Ran 49 tests in 2.3s at 21:36:37  ·  1 failed | 46 passed | 2 skipped
+ Ran 49 tests in 2.3s at 21:36:37
+ 1 failed | 46 passed | 2 skipped
 ```
 
 ## Layout
@@ -63,24 +64,26 @@ ctrl+j/k for their own pane movement.
   says what the solution holds, `2 projects | 49 tests`; selecting it shows
   the whole solution at once, every failure under it, and running it runs
   `dotnet test` over the solution in one go, filing each result under the
-  project that listed that test. The last line of the screen carries the
-  summary: `Ran 12 tests in 0.6s at 21:36:37  ·  1 failed | 11 passed | 0
-  skipped`. It counts results in live and keeps that one shape from the
-  first to the last, so the line settles rather than changing form when the
-  batch ends, and an outcome still at zero is greyed rather than missing.
-  The clock time stays grey; how long the batch has been going gets a quiet
-  cyan, and it ticks rather than waiting on results. What the solution holds
-  is not down there; the root carries it. What dtest is doing, and anything
-  it has to say, takes that line while there is something to say, and the
-  summary comes back after. So running one class reports that class.
-  Projects start collapsed, so a fresh tree is a list of them. `i` focuses
-  the view on the selected project or class: it becomes the root of the
-  tree, drawn flush, and from then on the app behaves as though its tests
-  were the only ones, down to what `A` runs and where `n` looks for the next
-  failure. `I` steps back out one level, leaving the cursor on what was
-  being looked at, and the tree's title says what is in focus meanwhile.
-  After a run, passing classes fold to one line and failing ones open, and a
-  project is only ever opened by that, never folded shut under you.
+  project that listed that test. The last two lines of the screen carry the
+  summary: what the batch was, `Ran 12 tests in 0.6s at 21:36:37`, and under
+  it how it went, `1 failed | 11 passed | 0 skipped`. It counts results in
+  live and keeps that one shape from the first to the last, so the lines
+  settle rather than changing form when the batch ends, and an outcome still
+  at zero is greyed rather than missing. The clock time stays grey; how long
+  the batch has been going gets a quiet cyan, and it ticks rather than
+  waiting on results. What the solution holds is not down there; the root
+  carries it. What dtest is doing, and anything it has to say, takes the
+  first of those lines while there is something to say, leaving the outcomes
+  on the one below, and the summary comes back after. So running one class
+  reports that class. Projects start collapsed, so a fresh tree is a list of
+  them. `i` focuses the view on the selected project or class: it becomes
+  the root of the tree, drawn flush, and from then on the app behaves as
+  though its tests were the only ones, down to what `A` runs and where `n`
+  looks for the next failure. `I` steps back out one level, leaving the
+  cursor on what was being looked at, and the tree's title says what is in
+  focus meanwhile. After a run, passing classes fold to one line and failing
+  ones open, and a project is only ever opened by that, never folded shut
+  under you.
 
 ## Features
 
