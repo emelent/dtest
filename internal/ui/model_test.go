@@ -74,11 +74,9 @@ func markedLines(m *Model) []string {
 	return out
 }
 
-// statsRow is the one-row summary above the tree, as plain text.
-func statsRow(m *Model) string { return strings.TrimRight(ansi.Strip(m.statsLine()), " ") }
-
-// statusRow is the status line along the bottom of the screen.
-func statusRow(m *Model) string { return strings.TrimRight(ansi.Strip(m.renderStatus()), " ") }
+// footerRow is the last line of the screen, as plain text: what dtest is
+// doing, or the summary of the last batch of runs.
+func footerRow(m *Model) string { return strings.TrimRight(ansi.Strip(m.renderFooter()), " ") }
 
 func containsAll(t *testing.T, v string, wants ...string) {
 	t.Helper()
@@ -96,8 +94,8 @@ func TestLayoutAndNavigation(t *testing.T) {
 		t.Fatalf("rows = %d", len(m.rows))
 	}
 	v := view(m)
-	containsAll(t, v, "DTEST  Sample  v1.2.3", "⎯⎯ Log  Sample ⎯", "⎯⎯ Tests ⎯", "▾ Sample (5 tests)", "▾ Alpha.Tests (5 tests)", "▸ MathTests (4 tests)", "Not run yet",
-		"Projects (1)", "nothing run yet", "press ? for help")
+	containsAll(t, v, "DTEST  Sample  v1.2.3", "⎯⎯ Log  Sample ⎯", "⎯⎯ Tests ⎯", "▾ Sample (1 project | 5 tests)", "▾ Alpha.Tests (5 tests)", "▸ MathTests (4 tests)", "Not run yet",
+		"nothing run yet", "press ? for help")
 	if strings.Contains(v, "Summary") || strings.Contains(v, "│") || strings.Contains(v, "Ready") || strings.Count(v, "DTEST") != 1 {
 		t.Errorf("one bottom pane and no extra text before the first run:\n%s", v)
 	}
@@ -113,31 +111,26 @@ func TestLayoutAndNavigation(t *testing.T) {
 			title = i
 		}
 	}
-	if got := strings.TrimRight(lines[title+1], " "); got != statsRow(m) || !strings.HasSuffix(got, "press ? for help") {
-		t.Errorf("summary row = %q", got)
+	// The tree starts right under its title, and the summary is the last
+	// line of the screen with the hint at its right edge.
+	if !strings.Contains(lines[title+1], "▾ Sample") {
+		t.Errorf("the root should follow the title, got %q", lines[title+1])
 	}
-	if !strings.Contains(lines[title+2], "▾ Sample") {
-		t.Errorf("the root should follow it, got %q", lines[title+2])
+	if got := strings.TrimRight(lines[len(lines)-1], " "); got != footerRow(m) || !strings.HasSuffix(got, "press ? for help") {
+		t.Errorf("footer = %q", got)
 	}
-	// What dtest is doing goes on the last line of the screen, leaving the
-	// summary row alone.
+	// What dtest is doing takes the footer while it is doing it.
 	m.building = true
 	m.refresh()
-	if got := statusRow(m); !strings.Contains(got, "Building Sample.slnx…") {
-		t.Errorf("status line = %q", got)
-	}
-	if got := statsRow(m); !strings.Contains(got, "Projects") {
-		t.Errorf("the summary row should keep the summary: %q", got)
-	}
-	if last := lines[len(lines)-1]; strings.TrimRight(last, " ") != "" {
-		t.Errorf("the status line is blank when there is nothing to say: %q", last)
+	if got := footerRow(m); !strings.Contains(got, "Building Sample.slnx…") || strings.Contains(got, "nothing run yet") {
+		t.Errorf("footer while building = %q", got)
 	}
 	m.building = false
 	m.refresh()
 	// The log pane is about 70% of what is left: header + title + log +
 	// title + summary + tree + status = 40, both panes the full width.
 	g := m.layout()
-	if g.logH < 23 || g.logH > 27 || g.treeH+g.logH+headerH+2*titleH+statsH+statusH != 40 {
+	if g.logH < 23 || g.logH > 27 || g.treeH+g.logH+headerH+2*titleH+footerH != 40 {
 		t.Fatalf("geometry = %+v", g)
 	}
 	if m.treeView.Width() != 140 || m.log.Width() != 140 {
@@ -195,7 +188,7 @@ func TestLayoutAndNavigation(t *testing.T) {
 	}
 	press(m, "g", "g")
 	// One highlighted row in the log (dim, unfocused), one in the tree.
-	if marked := markedLines(m); len(marked) != 2 || !strings.Contains(marked[1], "Sample (5 tests)") {
+	if marked := markedLines(m); len(marked) != 2 || !strings.Contains(marked[1], "Sample (1 project | 5 tests)") {
 		t.Fatalf("markers = %v", marked)
 	}
 	if !strings.Contains(m.View().Content, bgUnfocused) || !strings.Contains(m.View().Content, bgFocused) {
@@ -387,8 +380,8 @@ func TestRunFlow(t *testing.T) {
 	}
 	v := view(m)
 	containsAll(t, v, "(5 tests | 4 running)")
-	if got := statsRow(m); strings.Contains(got, "Ran ") || strings.Contains(got, "·") {
-		t.Errorf("a run in flight reports nothing but the projects: %q", got)
+	if got := footerRow(m); !strings.Contains(got, "Ran 0 tests in 0.000s at 19:10:48  ·  0 failed | 0 passed | 0 skipped") {
+		t.Errorf("a run in flight keeps the same shape: %q", got)
 	}
 	// Only the project row spins; the running class beneath keeps its arrow,
 	// and nothing in the log spins at all.
@@ -409,8 +402,8 @@ func TestRunFlow(t *testing.T) {
 	if spinners != 1 || !strings.Contains(bottom, "▸ MathTests (4 tests | 4 running)") {
 		t.Errorf("spinners = %d; class should show its arrow:\n%s", spinners, bottom)
 	}
-	if strings.Contains(v, "RUN") || strings.Contains(v, "Running") {
-		t.Errorf("no RUN badge or Running text anywhere while tests run:\n%s", v)
+	if strings.Contains(v, badgeInfo.Render("RUN")) || strings.Contains(v, badgeFail.Render("RUN")) {
+		t.Errorf("no RUN badge while tests run:\n%s", v)
 	}
 
 	f.emit(dotnet.LineEvent{Text: "  Starting: Alpha.Tests"})
@@ -455,7 +448,7 @@ func TestRunFlow(t *testing.T) {
 		"▸ Theory (2 tests | 1 skipped)",
 		// The projects part leaves failures out; the outcomes report them,
 		// and the time is the tests' own, not the wall clock.
-		"Projects (1)  ·  Ran 5 tests in 0.033s at 19:10:48  ·  1 failed | 3 passed | 1 skipped",
+		"Ran 5 tests in 0.033s at 19:10:48  ·  1 failed | 3 passed | 1 skipped",
 	)
 	if strings.Contains(v, "Tests failed.") || strings.Contains(v, "Tests passed.") {
 		t.Error("no result line in the stats")
@@ -814,7 +807,7 @@ func TestSummaryCountsLastRun(t *testing.T) {
 		pass("Alpha.Tests.MathTests.Theory(n: 1)"), pass("Alpha.Tests.MathTests.Theory(n: 2)"),
 		pass("Alpha.Tests.SlowTests.Waits"))
 	// Four of the five took a millisecond each; the failure took none.
-	if got := statsRow(m); !strings.Contains(got, "Ran 5 tests in 0.004s") || !strings.Contains(got, "1 failed | 4 passed") {
+	if got := footerRow(m); !strings.Contains(got, "Ran 5 tests in 0.004s") || !strings.Contains(got, "1 failed | 4 passed") {
 		t.Errorf("after running everything: %q", got)
 	}
 
@@ -824,7 +817,7 @@ func TestSummaryCountsLastRun(t *testing.T) {
 	finishRun(t, m, f, pass("Alpha.Tests.SlowTests.Waits"))
 	v := view(m)
 	// The counts and the time are this run's, not every test that has run.
-	if got := statsRow(m); !strings.Contains(got, "Ran 1 test in 0.001s") || !strings.Contains(got, "1 passed") {
+	if got := footerRow(m); !strings.Contains(got, "Ran 1 test in 0.001s") || !strings.Contains(got, "1 passed") {
 		t.Errorf("after running one class: %q", got)
 	}
 	if !strings.Contains(v, "× Fails") {
@@ -835,21 +828,21 @@ func TestSummaryCountsLastRun(t *testing.T) {
 	}
 }
 
-// What dtest is doing, and anything it has to say, goes on the last line of
-// the screen and nowhere else.
-func TestStatusLineAtTheBottom(t *testing.T) {
+// What dtest is doing, and anything it has to say, takes the last line of
+// the screen; the rest of the time that line carries the run summary.
+func TestFooterLine(t *testing.T) {
 	m := newTestModel(t)
 	last := func() string {
 		lines := strings.Split(view(m), "\n")
 		return strings.TrimRight(lines[len(lines)-1], " ")
 	}
-	if last() != "" || statusRow(m) != "" {
-		t.Errorf("idle status line = %q", last())
+	if !strings.Contains(last(), "nothing run yet") || last() != footerRow(m) {
+		t.Errorf("idle footer = %q", last())
 	}
 	m.building = true
 	m.refresh()
-	if !strings.Contains(last(), "Building Sample.slnx…") {
-		t.Errorf("building = %q", last())
+	if got := last(); !strings.Contains(got, "Building Sample.slnx…") || strings.Contains(got, "nothing run yet") {
+		t.Errorf("building = %q", got)
 	}
 	m.building = false
 	m.loading = 1
@@ -868,14 +861,14 @@ func TestStatusLineAtTheBottom(t *testing.T) {
 	if !strings.Contains(last(), "FAIL") {
 		t.Errorf("an error carries the FAIL badge: %q", last())
 	}
-	// It never crowds the summary row above the tree.
-	if strings.Contains(statsRow(m), "No failed tests to re-run") {
-		t.Errorf("summary row = %q", statsRow(m))
+	// The hint stays put through all of it.
+	if !strings.HasSuffix(last(), "press ? for help") {
+		t.Errorf("the hint should hold its place: %q", last())
 	}
 	m.status = ""
 	m.refresh()
-	if last() != "" {
-		t.Errorf("the line clears again: %q", last())
+	if !strings.Contains(last(), "nothing run yet") {
+		t.Errorf("the summary comes back: %q", last())
 	}
 }
 
@@ -886,7 +879,7 @@ func TestTreeGuides(t *testing.T) {
 	m := newTestModel(t)
 	press(m, "j", "j", "l", "j", "j", "j", "space") // expand MathTests, then Theory
 	want := []string{
-		"▾ Sample (5 tests)",
+		"▾ Sample (1 project | 5 tests)",
 		"└─ ▾ Alpha.Tests (5 tests)",
 		"   ├─ ▾ MathTests (4 tests)",
 		"   │  ├─ · Adds",
@@ -907,7 +900,7 @@ func TestTreeGuides(t *testing.T) {
 	}
 	// Filtering hides rows, and the guides join up the ones that are left.
 	press(m, "/", "W", "a", "i", "enter")
-	wantFiltered := []string{"▾ Sample (5 tests)", "└─ ▾ Alpha.Tests (5 tests)", "   └─ ▾ SlowTests (1 test)", "      └─ · Waits"}
+	wantFiltered := []string{"▾ Sample (1 project | 5 tests)", "└─ ▾ Alpha.Tests (5 tests)", "   └─ ▾ SlowTests (1 test)", "      └─ · Waits"}
 	if got := treeRows(m); strings.Join(got, "|") != strings.Join(wantFiltered, "|") {
 		t.Errorf("filtered guides = %q", got)
 	}
@@ -924,7 +917,7 @@ func treeRows(m *Model) []string {
 		}
 	}
 	var out []string
-	for _, l := range lines[start+1:] { // the row after the title is the summary
+	for _, l := range lines[start : len(lines)-1] { // the last line is the footer
 		if l = strings.TrimRight(ansi.Truncate(l, m.treeView.Width(), ""), " "); l != "" {
 			out = append(out, strings.TrimPrefix(l, "  "))
 		}
@@ -982,7 +975,7 @@ func TestExpandAndCollapseAll(t *testing.T) {
 	m := newTestModel(t)
 	press(m, "L")
 	want := []string{
-		"▾ Sample (5 tests)",
+		"▾ Sample (1 project | 5 tests)",
 		"└─ ▾ Alpha.Tests (5 tests)",
 		"   ├─ ▾ MathTests (4 tests)",
 		"   │  ├─ · Adds",
@@ -1003,7 +996,7 @@ func TestExpandAndCollapseAll(t *testing.T) {
 		t.Fatalf("G -> %q", m.current().Name)
 	}
 	press(m, "H")
-	if got := treeRows(m); len(got) != 1 || got[0] != "▸ Sample (5 tests)" {
+	if got := treeRows(m); len(got) != 1 || got[0] != "▸ Sample (1 project | 5 tests)" {
 		t.Errorf("after H: %q", got)
 	}
 	if m.cursor != 0 || m.current().Kind != tree.KindRoot {
@@ -1069,7 +1062,7 @@ func TestRootNode(t *testing.T) {
 	// Its own row carries the total and nothing else: no tally of how the
 	// run went, and no time, both of which belong below it.
 	rows := treeRows(m)
-	if rows[0] != "▾ Sample (7 tests)" {
+	if rows[0] != "▾ Sample (2 projects | 7 tests)" {
 		t.Errorf("root row = %q", rows[0])
 	}
 	if !strings.Contains(rows[1], "1 failed") {
@@ -1106,9 +1099,11 @@ func TestLogDurationWaitsForTheRun(t *testing.T) {
 	}
 }
 
-// The summary keeps its tally back until the batch is finished, and when it
-// arrives the clock time is grey while the time the tests took is cyan.
-func TestSummaryWaitsThenColours(t *testing.T) {
+// The footer counts results in as they land and keeps one shape doing it:
+// the same line from the first result to the last, with the outcomes that
+// are still zero greyed rather than missing. The clock time is grey, the
+// time the tests took cyan.
+func TestSummaryLiveThenFinal(t *testing.T) {
 	f := stubRun(t)
 	m := newTestModel(t)
 	clock := time.Date(2026, 9, 19, 21, 36, 37, 0, time.Local)
@@ -1117,21 +1112,27 @@ func TestSummaryWaitsThenColours(t *testing.T) {
 
 	press(m, "A")
 	<-f.started
-	// A result has landed, but the run is not over.
+	if got := footerRow(m); !strings.Contains(got, "Ran 0 tests in 0.000s at 21:36:37  ·  0 failed | 0 passed | 0 skipped") {
+		t.Errorf("nothing reported yet: %q", got)
+	}
+	// One result lands, and the footer moves with it.
 	f.emit(dotnet.ResultEvent{Result: dotnet.Result{
 		Name: "Alpha.Tests.MathTests.Adds", Outcome: dotnet.OutcomePassed, Duration: 2300 * time.Millisecond}})
 	m.Update(<-m.runEvents())
-	if got := statsRow(m); strings.Contains(got, "Ran ") || strings.Contains(got, "passed") {
+	if got := footerRow(m); !strings.Contains(got, "Ran 1 test in 2.3s at 21:36:37  ·  0 failed | 1 passed | 0 skipped") {
 		t.Errorf("mid-run summary = %q", got)
 	}
 	f.emit(dotnet.DoneEvent{Results: []dotnet.Result{{
 		Name: "Alpha.Tests.MathTests.Adds", Outcome: dotnet.OutcomePassed, Duration: 2300 * time.Millisecond}}})
 	m.Update(<-m.runEvents())
-
-	if got := statsRow(m); !strings.Contains(got, "Ran 1 test in 2.3s at 21:36:37") || !strings.Contains(got, "1 passed") {
-		t.Errorf("finished summary = %q", got)
+	if got := footerRow(m); !strings.Contains(got, "Ran 1 test in 2.3s at 21:36:37  ·  0 failed | 1 passed | 0 skipped") {
+		t.Errorf("the finished line reads the same: %q", got)
 	}
-	line := m.statsLine()
+	// A zero outcome is grey; one that happened is bold in its colour.
+	line := m.renderFooter()
+	if !strings.Contains(line, styleDim.Render("0 failed")) || !strings.Contains(line, stylePassed.Bold(true).Render("1 passed")) {
+		t.Errorf("outcome colours: %q", line)
+	}
 	if !strings.Contains(line, styleDim.Render(" at 21:36:37")) {
 		t.Errorf("the clock time should be grey: %q", ansi.Strip(line))
 	}

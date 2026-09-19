@@ -222,10 +222,6 @@ func (m *Model) startListing() tea.Cmd {
 	return tea.Batch(cmds...)
 }
 
-// runInFlight reports whether a batch of runs is still going: one running,
-// or more waiting behind it.
-func (m *Model) runInFlight() bool { return m.run != nil || len(m.queue) > 0 }
-
 // busy reports whether dotnet is doing something on our behalf.
 func (m *Model) busy() bool {
 	return m.building || m.loading > 0 || m.run != nil

@@ -20,8 +20,7 @@ Actual:   428
 
 
 ⎯⎯ Tests ⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
- Projects 1 passed (2)  ·  Ran 49 tests in 2.3s at 21:36:37  ·  1 failed | 46 passed | 2 skipped   press ? for help
-  ▾ Shop (49 tests)
+  ▾ Shop (2 projects | 49 tests)
   ├─ ▾ Shop.Api.Tests (16 tests | 1 failed | 1 skipped) 1.1s
   │  ├─ ▸ Controllers.OrdersControllerTests (3 tests) 0.305s
   │  ├─ ▸ Integration.CheckoutFlowTests (2 tests | 1 skipped) 0.803s
@@ -32,7 +31,7 @@ Actual:   428
   └─ ▾ Shop.Core.Tests (33 tests | 1 skipped) 1.2s
      ├─ ▸ Inventory.StockTests (8 tests) 0.201s
      └─ ▸ Pricing.MoneyTests (12 tests) 0.400s
-  FAIL  Shop.Api.Tests: 1 test failed
+ Ran 49 tests in 2.3s at 21:36:37  ·  1 failed | 46 passed | 2 skipped                             press ? for help
 ```
 
 ## Layout
@@ -55,28 +54,25 @@ ctrl+j/k for their own pane movement.
   rows under a root that stands for the solution itself, drawn with branch
   lines (`├─`, `└─`, `│`) so the nesting reads at a glance, with
   vitest-style counts and durations on every group. The root's own row just
-  says how many tests there are; selecting it shows the whole solution at
-  once, every failure under it, and running it runs `dotnet test` over the
-  solution in one go, filing each result under the project that listed that
-  test. One row above the tree carries the summary: the solution's test
-  projects and, once a batch of runs has finished, `Ran 49 tests in 2.3s at
-  21:36:37` and then how they turned out, with the key hint at the right
-  edge. While a batch is still going it reports nothing but the projects,
-  since a tally that grows as results land invites reading half a run as the
-  whole of it, and the tree is where progress belongs. The clock time stays
-  grey; how long the tests took gets a quiet cyan. Failures are left out of
-  the projects part, since the outcomes are where they go, and the number of
-  tests in the solution is not there either: the root carries it. What dtest
-  is doing, and anything it has to say, goes on the last line of the screen
-  instead, which is always there and blank the rest of the time so nothing
-  above it moves when a message arrives. So running one class reports that
-  class. After a run, passing classes fold to one line and failing ones
-  open.
+  says what the solution holds, `2 projects | 49 tests`; selecting it shows
+  the whole solution at once, every failure under it, and running it runs
+  `dotnet test` over the solution in one go, filing each result under the
+  project that listed that test. The last line of the screen carries the
+  summary, with the key hint at its right edge: `Ran 12 tests in 0.6s at
+  21:36:37  ·  1 failed | 11 passed | 0 skipped`. It counts results in live
+  and keeps that one shape from the first to the last, so the line settles
+  rather than changing form when the batch ends, and an outcome still at
+  zero is greyed rather than missing. The clock time stays grey; how long
+  the tests took gets a quiet cyan. What the solution holds is not down
+  there; the root carries it. What dtest is doing, and anything it has to
+  say, takes that line while there is something to say, and the summary
+  comes back after. So running one class reports that class. After a run,
+  passing classes fold to one line and failing ones open.
 
 ## Features
 
 - Run the selected root, project, class, method or test; `A` and running the root both run the whole solution in one `dotnet test`, `F` re-runs only what failed; anything smaller is one `dotnet test` per project, and runs queue up
-- Live status while tests run: the project row spins and everything running beneath it turns cyan, tests waiting in a queued run are greyed out behind an hourglass, ⧗; ✓ × ↓ arrive as each result comes in; projects, classes and theories carry a fold arrow (▾ / ▸) in the colour of their status, with counts and durations rolled up
+- Live status while tests run: the footer counts results in as they land, the project row spins and everything running beneath it turns cyan, tests waiting in a queued run are greyed out behind an hourglass, ⧗; ✓ × ↓ arrive as each result comes in; projects, classes and theories carry a fold arrow (▾ / ▸) in the colour of their status, with counts and durations rolled up
 - Open the selected test in Neovim, either a running instance (via the socket in `$nvim_sock`) or one launched in place; a failed test opens at the failing line
 - Filter the tree by test or project name as you type, or narrow it to the failed (`f`) or skipped (`s`) tests
 

@@ -16,8 +16,7 @@ import (
 const (
 	headerH = 1
 	titleH  = 1 // each pane has a title line
-	statsH  = 1 // the summary row above the tree
-	statusH = 1 // the status line along the bottom of the screen
+	footerH = 1 // the status and summary line along the bottom of the screen
 )
 
 // geometry is the current pane arrangement.
@@ -27,11 +26,10 @@ type geometry struct {
 }
 
 // layout splits the window: what is left over once the header, the two pane
-// titles, the summary row and the status line have their rows is split
-// between the panes, the log taking about 70% of it. Both run the full
-// width.
+// titles and the footer have their rows is split between the panes, the log
+// taking about 70% of it. Both run the full width.
 func (m *Model) layout() geometry {
-	body := max(4, m.height-headerH-2*titleH-statsH-statusH)
+	body := max(4, m.height-headerH-2*titleH-footerH)
 	g := geometry{}
 	g.logH = max(1, body*7/10)
 	g.treeH = max(1, body-g.logH)
@@ -52,8 +50,8 @@ func (m *Model) View() tea.View {
 	if m.help {
 		top = lipgloss.JoinVertical(lipgloss.Left, m.paneTitle("Usage", true, m.width, ""), m.renderHelp(g.logH))
 	}
-	bottom := lipgloss.JoinVertical(lipgloss.Left, m.paneTitle(m.treeTitle(), m.focus == paneTree, m.width, ""), m.renderBottom(g))
-	content := lipgloss.JoinVertical(lipgloss.Left, m.renderHeader(), top, bottom, m.renderStatus())
+	bottom := lipgloss.JoinVertical(lipgloss.Left, m.paneTitle(m.treeTitle(), m.focus == paneTree, m.width, ""), m.treeView.View())
+	content := lipgloss.JoinVertical(lipgloss.Left, m.renderHeader(), top, bottom, m.renderFooter())
 	v := tea.NewView(content)
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
@@ -413,12 +411,6 @@ func highlight(line string, width int, focused bool) string {
 	return bg + s + "\x1b[0m"
 }
 
-// renderBottom is the summary row with the tree beneath it, both the full
-// width of the window.
-func (m *Model) renderBottom(g geometry) string {
-	return lipgloss.JoinVertical(lipgloss.Left, m.statsLine(), m.treeView.View())
-}
-
 // treeGuides draws the branch lines down the left of the tree, one per row:
 // a corner or a tee at the row's own level, and above it a bar for every
 // level that carries on further down. Projects are roots, so they get none.
@@ -480,7 +472,7 @@ func (m *Model) renderNode(n *tree.Node, guide string) string {
 	var tail []string
 	switch {
 	case n.Kind == tree.KindRoot:
-		tail = append(tail, styleDim.Render("("+testCount(n.Counts().Total)+")"))
+		tail = append(tail, styleDim.Render("("+plural(len(n.Children), "project")+" | "+testCount(n.Counts().Total)+")"))
 	case !n.IsLeaf():
 		tail = append(tail, m.renderCounts(n.Counts()))
 	}
@@ -514,11 +506,14 @@ func isHeading(n *tree.Node) bool {
 }
 
 // testCount is "4 tests", or "1 test".
-func testCount(n int) string {
+func testCount(n int) string { return plural(n, "test") }
+
+// plural counts things: "2 projects", "1 project".
+func plural(n int, thing string) string {
 	if n == 1 {
-		return "1 test"
+		return "1 " + thing
 	}
-	return fmt.Sprintf("%d tests", n)
+	return fmt.Sprintf("%d %ss", n, thing)
 }
 
 // renderCounts is vitest's "(4 tests | 1 failed | 1 skipped)".
@@ -632,84 +627,51 @@ func (m *Model) renderHeader() string {
 	return fit(line, m.width)
 }
 
-// statsLine is the one row above the tree: how the last batch of runs went,
-// with the key hint at the right edge.
-func (m *Model) statsLine() string {
-	return fitLine(" "+m.summary(), styleDim.Render("press ? for help"), m.width)
+// renderFooter is the last line of the screen: what dtest is doing or has
+// to say and, the rest of the time, how the last batch of runs went, with
+// the key hint at the right edge.
+func (m *Model) renderFooter() string {
+	left := m.stateLine()
+	if left == "" {
+		left = m.summary()
+	}
+	return fitLine(" "+left, styleDim.Render("press ? for help"), m.width)
 }
 
-// renderStatus is the last line of the screen: what dtest is doing, or a
-// message about what just happened. It is blank the rest of the time, and
-// always there, so nothing above it moves when a message arrives.
-func (m *Model) renderStatus() string {
-	return fit(" "+m.stateLine(), m.width)
-}
-
-// summary reports the solution's test projects, then how the tests of the
-// last batch of runs turned out, when it started and how long those tests
-// took. While a batch is still going it says only that: a tally that grows
-// as results land invites reading half a run as the whole of it, and the
-// tree is where progress belongs. The number of tests in the solution is
-// not here either; the root of the tree carries it.
+// summary is how the tests of the last batch of runs are going: what has
+// been run of it so far and how that went. It keeps one shape from the
+// first result to the last, so the line settles rather than changing form
+// when the batch ends. What the solution holds is not here; the root of the
+// tree carries it.
 func (m *Model) summary() string {
-	var pc tree.Counts
-	for _, p := range m.tree.Projects {
-		pc.Total++
-		switch p.Status() {
-		case tree.StatusPassed:
-			pc.Passed++
-		case tree.StatusSkipped:
-			pc.Skipped++
-		}
+	if m.batchStart.IsZero() {
+		return styleDim.Render("nothing run yet")
 	}
-	bar := styleDim.Render(" | ")
-	parts := []string{styleDim.Render("Projects ") + strings.Join(summaryParts(pc), bar)}
 	ran := m.batchCounts()
-	switch {
-	case m.batchStart.IsZero():
-		parts = append(parts, styleDim.Render("nothing run yet"))
-	case m.runInFlight(), ran.Total == 0:
-		// A run in flight reports nothing at all. A tally and a time that
-		// grow as results land invite reading half a run as the whole of it,
-		// and the tree is where progress belongs.
-	default:
-		// What the batch was, then how it went. The clock time is a
-		// footnote, so it stays grey; how long the tests took is worth a
-		// glance, so it gets a quiet cyan.
-		parts = append(parts, styleDim.Render("Ran "+testCount(ran.Total)+" in ")+
-			styleElapsed.Render(formatDuration(m.batchDuration()))+
-			styleDim.Render(" at "+m.batchStart.Format("15:04:05")))
-		parts = append(parts, strings.Join(outcomeParts(ran), bar))
-	}
-	return strings.Join(parts, styleDim.Render("  ·  "))
+	done := ran.Failed + ran.Passed + ran.Skipped
+	// The clock time is a footnote, so it stays grey; how long the tests
+	// took is worth a glance, so it gets a quiet cyan.
+	head := styleDim.Render("Ran "+testCount(done)+" in ") +
+		styleElapsed.Render(formatDuration(m.batchDuration())) +
+		styleDim.Render(" at "+m.batchStart.Format("15:04:05"))
+	return head + styleDim.Render("  ·  ") + strings.Join(outcomeParts(ran), styleDim.Render(" | "))
 }
 
-// outcomeParts lists the non-zero outcomes of a tally, each bold in its
-// colour: "1 failed", "46 passed", "2 skipped".
+// outcomeParts is the three outcomes of a tally, each bold in its colour,
+// or grey while it is still zero, so the line keeps its shape as a run
+// fills it in.
 func outcomeParts(c tree.Counts) []string {
-	var parts []string
-	if c.Failed > 0 {
-		parts = append(parts, styleFailed.Bold(true).Render(fmt.Sprintf("%d failed", c.Failed)))
+	part := func(n int, label string, style lipgloss.Style) string {
+		if n == 0 {
+			style = styleDim
+		}
+		return style.Bold(n > 0).Render(fmt.Sprintf("%d %s", n, label))
 	}
-	if c.Passed > 0 {
-		parts = append(parts, stylePassed.Bold(true).Render(fmt.Sprintf("%d passed", c.Passed)))
+	return []string{
+		part(c.Failed, "failed", styleFailed),
+		part(c.Passed, "passed", stylePassed),
+		part(c.Skipped, "skipped", styleSkipped),
 	}
-	if c.Skipped > 0 {
-		parts = append(parts, styleSkipped.Bold(true).Render(fmt.Sprintf("%d skipped", c.Skipped)))
-	}
-	return parts
-}
-
-// summaryParts is vitest's "1 failed | 1 passed | 2 skipped (4)" as its
-// pieces, with the total attached to the last one, or the total alone when
-// nothing has an outcome yet.
-func summaryParts(c tree.Counts) []string {
-	parts := outcomeParts(c)
-	if len(parts) == 0 {
-		return []string{styleDim.Render(fmt.Sprintf("(%d)", c.Total))}
-	}
-	parts[len(parts)-1] += styleDim.Render(fmt.Sprintf(" (%d)", c.Total))
-	return parts
 }
 
 // stateLine is what dtest is doing: a status message, or building or
