@@ -209,9 +209,9 @@ func indexOf(rows []*tree.Node, n *tree.Node) int {
 func (m *Model) emptyTreeMessage() string {
 	switch {
 	case m.building:
-		return "  " + m.spin.View() + " Building " + filepath.Base(m.cfg.Target) + "…"
+		return "  " + m.spin.View() + styleDim.Render(" Building "+filepath.Base(m.cfg.Target)+"…")
 	case m.loading > 0:
-		return "  " + m.spin.View() + " Listing tests…"
+		return "  " + m.spin.View() + styleDim.Render(" Listing tests…")
 	case m.query != "":
 		return styleDim.Render("  No tests match " + m.query)
 	case m.statusFilter == tree.StatusFailed:
@@ -727,9 +727,11 @@ func (m *Model) stateLine() string {
 		}
 		return badge + " " + m.status
 	case m.building:
-		return "Building " + filepath.Base(m.cfg.Target) + "…"
+		// Progress, not news: grey, so it sits quietly until it has
+		// something to report.
+		return styleDim.Render("Building " + filepath.Base(m.cfg.Target) + "…")
 	case m.loading > 0:
-		return "Listing tests…"
+		return styleDim.Render("Listing tests…")
 	}
 	return ""
 }
