@@ -6,11 +6,12 @@ import (
 	"dtest/internal/tree"
 )
 
-// handleKey dispatches a key press: help, filter entry, pane switching,
-// then the focused pane's keys, then keys that work everywhere.
+// handleKey turns a key press into an [Action] and dispatches it: help and
+// the filter prompt first, since they swallow everything, then the focused
+// pane, then the actions that work from either.
 func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
-	key := msg.String()
-	if key == "ctrl+c" {
+	act := action(msg.String())
+	if act == actForceQuit {
 		m.Shutdown()
 		return m, tea.Quit
 	}
@@ -22,61 +23,51 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	if m.filtering {
 		return m.handleFilterKey(msg)
 	}
-	if key != "g" {
+	// gg jumps to the top, so the first press only arms the second.
+	if act != actTop {
 		defer func() { m.pendingG = false }()
 	}
-	switch key {
-	case "ctrl+j", "ctrl+k", "tab", "shift+tab":
-		// Two panes, so either direction is the other pane. tab is for
-		// terminals or tmux setups that keep ctrl+j/k for themselves.
-		if m.focus == paneLog {
-			m.focus = paneTree
-		} else {
-			m.focus = paneLog
-		}
-	default:
-		var handled bool
-		var cmd tea.Cmd
-		if m.focus == paneTree {
-			handled, cmd = m.handleTreeKey(key)
-		} else {
-			handled, cmd = m.handleLogKey(key)
-		}
-		if !handled {
-			return m.handleCommonKey(key)
-		}
-		if cmd != nil {
-			return m, cmd
-		}
+	var handled bool
+	var cmd tea.Cmd
+	if m.focus == paneTree {
+		handled, cmd = m.handleTreeAction(act)
+	} else {
+		handled, cmd = m.handleLogAction(act)
+	}
+	if !handled {
+		return m.handleCommonAction(act)
+	}
+	if cmd != nil {
+		return m, cmd
 	}
 	m.refresh()
 	return m, nil
 }
 
-// handleTreeKey moves through and folds the tree; the log follows the
+// handleTreeAction moves through and folds the tree; the log follows the
 // selection.
-func (m *Model) handleTreeKey(key string) (bool, tea.Cmd) {
+func (m *Model) handleTreeAction(act Action) (bool, tea.Cmd) {
 	n := m.current()
 	page := m.treeView.Height()
-	switch key {
-	case "j", "down":
+	switch act {
+	case actDown:
 		m.move(1)
-	case "k", "up":
+	case actUp:
 		m.move(-1)
-	case "g":
+	case actTop:
 		if m.pendingG {
 			m.move(-len(m.rows))
 			m.pendingG = false
 		} else {
 			m.pendingG = true
 		}
-	case "G", "end":
+	case actBottom:
 		m.move(len(m.rows))
-	case "ctrl+d", "pgdown":
+	case actHalfDown:
 		m.move(page / 2)
-	case "ctrl+u", "pgup":
+	case actHalfUp:
 		m.move(-page / 2)
-	case "h", "left":
+	case actCollapse:
 		if n == nil {
 			return true, nil
 		}
@@ -85,7 +76,7 @@ func (m *Model) handleTreeKey(key string) (bool, tea.Cmd) {
 		} else if n.Parent != nil {
 			m.selectNode(n.Parent)
 		}
-	case "l", "right":
+	case actExpand:
 		if n == nil || n.IsLeaf() {
 			return true, nil
 		}
@@ -94,23 +85,22 @@ func (m *Model) handleTreeKey(key string) (bool, tea.Cmd) {
 		} else if len(n.Children) > 0 {
 			m.move(1)
 		}
-	case "L":
-		// Shifted, the fold keys act on the whole tree. A filtered tree
-		// shows every match already, so folding is off there.
+	case actExpandAll:
+		// A filtered tree shows every match already, so folding is off there.
 		if !m.filtered() {
 			m.tree.SetExpanded(true)
 		}
-	case "H":
+	case actCollapseAll:
 		if !m.filtered() {
 			m.tree.SetExpanded(false)
 		}
-	case "space":
+	case actToggleFold:
 		if n != nil && !n.IsLeaf() && !m.filtered() {
 			n.Expanded = !n.Expanded
 		}
-	case "t", "/":
+	case actFilter:
 		m.filtering = true
-	case "esc":
+	case actClear:
 		m.query = ""
 		m.statusFilter = tree.StatusNone
 	default:
@@ -119,46 +109,46 @@ func (m *Model) handleTreeKey(key string) (bool, tea.Cmd) {
 	return true, nil
 }
 
-// handleLogKey moves the log's cursor line with vim motions; ctrl+e and
-// ctrl+y scroll without moving it.
-func (m *Model) handleLogKey(key string) (bool, tea.Cmd) {
+// handleLogAction moves the log's cursor line with vim motions, scrolls
+// under it, and selects and copies from it.
+func (m *Model) handleLogAction(act Action) (bool, tea.Cmd) {
 	page := m.log.Height()
-	switch key {
-	case "j", "down":
+	switch act {
+	case actDown:
 		m.moveLog(1)
-	case "k", "up":
+	case actUp:
 		m.moveLog(-1)
-	case "g":
+	case actTop:
 		if m.pendingG {
 			m.moveLog(-len(m.logLines))
 			m.pendingG = false
 		} else {
 			m.pendingG = true
 		}
-	case "G", "end":
+	case actBottom:
 		m.moveLog(len(m.logLines))
-	case "ctrl+d", "pgdown":
+	case actHalfDown:
 		m.moveLog(page / 2)
-	case "ctrl+u", "pgup":
+	case actHalfUp:
 		m.moveLog(-page / 2)
-	case "ctrl+f":
+	case actPageDown:
 		m.moveLog(page)
-	case "ctrl+b":
+	case actPageUp:
 		m.moveLog(-page)
-	case "ctrl+e":
+	case actScrollDown:
 		m.log.ScrollDown(1)
-	case "ctrl+y":
+	case actScrollUp:
 		m.log.ScrollUp(1)
-	case "V":
+	case actSelect:
 		// Linewise, as vim's V is: the motions above extend it from here.
 		if m.selAnchor >= 0 {
 			m.selAnchor = -1
 		} else {
 			m.selAnchor = m.logCursor
 		}
-	case "y":
+	case actCopy:
 		return true, m.copyLog()
-	case "esc":
+	case actClear:
 		if m.selAnchor < 0 {
 			return false, nil
 		}
@@ -169,45 +159,52 @@ func (m *Model) handleLogKey(key string) (bool, tea.Cmd) {
 	return true, nil
 }
 
-// handleCommonKey covers actions that work from either pane.
-func (m *Model) handleCommonKey(key string) (tea.Model, tea.Cmd) {
-	switch key {
-	case "q":
+// handleCommonAction covers what works from either pane.
+func (m *Model) handleCommonAction(act Action) (tea.Model, tea.Cmd) {
+	switch act {
+	case actSwitchPane:
+		// Two panes, so either direction is the other pane.
+		if m.focus == paneLog {
+			m.focus = paneTree
+		} else {
+			m.focus = paneLog
+		}
+	case actQuit:
 		m.Shutdown()
 		return m, tea.Quit
-	case "?":
+	case actHelp:
 		m.help = true
-	case "enter", "r":
+	case actRun:
 		if n := m.current(); n != nil {
 			return m, m.enqueue([]*tree.Node{n})
 		}
-	case "A":
+	case actRunAll:
 		return m, m.enqueue([]*tree.Node{m.tree.Root}) // the solution, in one run
-	case "a":
+	case actShowAll:
 		m.query = ""
 		m.statusFilter = tree.StatusNone
-	case "F":
+	case actRunFailed:
 		return m, m.runFailed()
-	case "f":
+	case actOnlyFailed:
 		m.toggleStatusFilter(tree.StatusFailed)
-	case "s":
+	case actOnlySkipped:
 		m.toggleStatusFilter(tree.StatusSkipped)
-	case "x":
+	case actCancel:
 		return m, m.cancelRun()
-	case "n":
+	case actNextFailure:
 		return m, m.nextFailed(true)
-	case "N":
+	case actPrevFailure:
 		return m, m.nextFailed(false)
-	case "o":
+	case actOpenInEditor:
 		return m, m.openInEditor()
-	case "v":
+	case actToggleOutput:
 		m.showOutput = !m.showOutput
 		m.refresh()
 		if m.showOutput {
 			m.log.GotoBottom()
 		}
 		return m, nil
-	case "ctrl+r":
+	case actReload:
 		return m, m.reload()
 	}
 	m.refresh()
@@ -215,6 +212,9 @@ func (m *Model) handleCommonKey(key string) (tea.Model, tea.Cmd) {
 }
 
 // handleFilterKey edits the tree filter; the tree narrows as it is typed.
+// The prompt reads keys itself rather than through the keymap: while it is
+// open almost every key is text, and enter, esc and backspace mean what
+// they mean in any prompt, so they are not the config's to move.
 func (m *Model) handleFilterKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "enter":

@@ -726,29 +726,34 @@ func (m *Model) stateLine() string {
 
 // Help.
 
-type helpRow struct{ keys, desc string }
+// helpRow names the actions a line of the help covers; the keys it prints
+// are looked up when it is drawn, so a rebinding shows up there too.
+type helpRow struct {
+	acts []Action
+	desc string
+}
 
 var helpRows = []helpRow{
-	{"ctrl+j / ctrl+k", "to switch between the log and the tree (tab works too)"},
-	{"j / k", "to move through the tree, or the lines of the log"},
-	{"gg / G", "to jump to the top / bottom"},
-	{"ctrl+d / ctrl+u", "to move half a page (ctrl+e / ctrl+y scroll the log without moving)"},
-	{"V then y", "to select lines of the log and copy them; the mouse selects too"},
-	{"y", "to copy the log line under the cursor"},
-	{"l / h", "to expand / collapse a project, class or theory"},
-	{"L / H", "to expand / collapse the whole tree"},
-	{"enter or r", "to run the selected project, class or test"},
-	{"A", "to run every project"},
-	{"F", "to rerun only the failed tests"},
-	{"f / s", "to show only the failed / skipped tests"},
-	{"a", "to show all tests again (esc does too)"},
-	{"x", "to cancel the running tests"},
-	{"n / N", "to jump to the next / previous failure"},
-	{"o", "to open in Neovim: a stack frame under the log cursor, else a failed test's failing line, else the declaration"},
-	{"t or /", "to filter the tree by name (enter keeps it, esc clears every filter)"},
-	{"v", "to show the raw dotnet output of the selected project instead"},
-	{"ctrl+r", "to rebuild and list the tests again"},
-	{"q", "to quit"},
+	{[]Action{actSwitchPane}, "to switch between the log and the tree (tab works too)"},
+	{[]Action{actDown, actUp}, "to move through the tree, or the lines of the log"},
+	{[]Action{actTop, actBottom}, "to jump to the top (pressed twice) / the bottom"},
+	{[]Action{actHalfDown, actHalfUp}, "to move half a page"},
+	{[]Action{actScrollDown, actScrollUp}, "to scroll the log without moving its cursor"},
+	{[]Action{actSelect, actCopy}, "to select lines of the log and copy them; the mouse selects too"},
+	{[]Action{actExpand, actCollapse}, "to expand / collapse a project, class or theory"},
+	{[]Action{actExpandAll, actCollapseAll}, "to expand / collapse the whole tree"},
+	{[]Action{actRun}, "to run the selected project, class or test"},
+	{[]Action{actRunAll}, "to run the whole solution"},
+	{[]Action{actRunFailed}, "to rerun only the failed tests"},
+	{[]Action{actOnlyFailed, actOnlySkipped}, "to show only the failed / skipped tests"},
+	{[]Action{actShowAll}, "to show all tests again (esc does too)"},
+	{[]Action{actCancel}, "to cancel the running tests"},
+	{[]Action{actNextFailure, actPrevFailure}, "to jump to the next / previous failure"},
+	{[]Action{actOpenInEditor}, "to open in Neovim: a stack frame under the log cursor, else a failed test's failing line, else the declaration"},
+	{[]Action{actFilter}, "to filter the tree by name (enter keeps it, esc clears every filter)"},
+	{[]Action{actToggleOutput}, "to show the raw dotnet output of the selected project instead"},
+	{[]Action{actReload}, "to rebuild and list the tests again"},
+	{[]Action{actQuit}, "to quit"},
 }
 
 // renderHelp is vitest's "Watch Usage" list, drawn in the log pane; any
@@ -756,7 +761,7 @@ var helpRows = []helpRow{
 func (m *Model) renderHelp(height int) string {
 	var b strings.Builder
 	for _, r := range helpRows {
-		fmt.Fprintf(&b, " %s %s %s\n", styleDim.Render("press"), styleKey.Render(fmt.Sprintf("%-16s", r.keys)), r.desc)
+		fmt.Fprintf(&b, " %s %s %s\n", styleDim.Render("press"), styleKey.Render(fmt.Sprintf("%-16s", keysFor(r.acts...))), r.desc)
 	}
 	nvim := "o sends the file and line to the Neovim listening on " + m.socket + " (from $nvim_sock or --nvim-socket)"
 	if m.socket == "" {
@@ -769,28 +774,36 @@ func (m *Model) renderHelp(height int) string {
 
 // Output colouring.
 
-// logRules classify raw dotnet lines, in order; the first match styles it.
-var logRules = []struct {
+// logRule classifies a raw dotnet line; the first match styles it.
+type logRule struct {
 	match func(string) bool
 	style lipgloss.Style
-}{
-	{func(s string) bool { return strings.HasPrefix(s, "$ ") }, styleCommand},
-	{func(s string) bool { return strings.HasPrefix(strings.TrimLeft(s, " "), "Passed ") }, stylePassed},
-	{func(s string) bool { return strings.HasPrefix(strings.TrimLeft(s, " "), "Failed ") }, styleFailed.Bold(true)},
-	{func(s string) bool { return strings.HasPrefix(strings.TrimLeft(s, " "), "Skipped ") }, styleSkipped},
-	{func(s string) bool { return strings.HasPrefix(s, "[xUnit.net") }, styleDim},
-	{func(s string) bool { return strings.HasPrefix(strings.TrimLeft(s, " "), "at ") }, styleDim},
-	{func(s string) bool {
-		return strings.Contains(s, "error ") || strings.Contains(s, "Error Message") || strings.Contains(s, "Test Run Failed") ||
-			strings.Contains(s, "Build FAILED") || strings.Contains(s, "[FAIL]") || strings.HasPrefix(strings.TrimLeft(s, " "), "Failed:") ||
-			strings.Contains(s, "Exception") || strings.Contains(s, "Assert.") || strings.Contains(s, "Failure")
-	}, styleLogError},
-	{func(s string) bool {
-		return strings.Contains(s, "warning ") || strings.Contains(s, "[SKIP]") || strings.HasPrefix(strings.TrimLeft(s, " "), "Skipped:")
-	}, styleSkipped},
-	{func(s string) bool {
-		return strings.Contains(s, "Test Run Successful") || strings.Contains(s, "Build succeeded") || strings.HasPrefix(strings.TrimLeft(s, " "), "Passed:")
-	}, stylePassed},
+}
+
+// logRules are rebuilt with the palette, since they hold styles rather than
+// look them up.
+var logRules []logRule
+
+func buildLogRules() {
+	logRules = []logRule{
+		{func(s string) bool { return strings.HasPrefix(s, "$ ") }, styleCommand},
+		{func(s string) bool { return strings.HasPrefix(strings.TrimLeft(s, " "), "Passed ") }, stylePassed},
+		{func(s string) bool { return strings.HasPrefix(strings.TrimLeft(s, " "), "Failed ") }, styleFailed.Bold(true)},
+		{func(s string) bool { return strings.HasPrefix(strings.TrimLeft(s, " "), "Skipped ") }, styleSkipped},
+		{func(s string) bool { return strings.HasPrefix(s, "[xUnit.net") }, styleDim},
+		{func(s string) bool { return strings.HasPrefix(strings.TrimLeft(s, " "), "at ") }, styleDim},
+		{func(s string) bool {
+			return strings.Contains(s, "error ") || strings.Contains(s, "Error Message") || strings.Contains(s, "Test Run Failed") ||
+				strings.Contains(s, "Build FAILED") || strings.Contains(s, "[FAIL]") || strings.HasPrefix(strings.TrimLeft(s, " "), "Failed:") ||
+				strings.Contains(s, "Exception") || strings.Contains(s, "Assert.") || strings.Contains(s, "Failure")
+		}, styleLogError},
+		{func(s string) bool {
+			return strings.Contains(s, "warning ") || strings.Contains(s, "[SKIP]") || strings.HasPrefix(strings.TrimLeft(s, " "), "Skipped:")
+		}, styleSkipped},
+		{func(s string) bool {
+			return strings.Contains(s, "Test Run Successful") || strings.Contains(s, "Build succeeded") || strings.HasPrefix(strings.TrimLeft(s, " "), "Passed:")
+		}, stylePassed},
+	}
 }
 
 // colorLog styles raw dotnet output for reading: results green, red and

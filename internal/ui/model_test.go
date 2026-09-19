@@ -51,27 +51,32 @@ func TestProjectsStartCollapsed(t *testing.T) {
 	}
 }
 
+// keyPress builds the message a terminal sends for a key name.
+func keyPress(k string) tea.KeyPressMsg {
+	msg := tea.KeyPressMsg{Text: k}
+	if len(k) == 1 {
+		msg.Code = rune(k[0])
+	}
+	switch k {
+	case "enter":
+		msg = tea.KeyPressMsg{Code: tea.KeyEnter}
+	case "esc":
+		msg = tea.KeyPressMsg{Code: tea.KeyEscape}
+	case "space":
+		msg = tea.KeyPressMsg{Code: tea.KeySpace, Text: " "}
+	case "backspace":
+		msg = tea.KeyPressMsg{Code: tea.KeyBackspace}
+	}
+	if strings.HasPrefix(k, "ctrl+") {
+		msg = tea.KeyPressMsg{Code: rune(k[len(k)-1]), Mod: tea.ModCtrl}
+	}
+	return msg
+}
+
 func press(m *Model, keys ...string) tea.Cmd {
 	var last tea.Cmd
 	for _, k := range keys {
-		msg := tea.KeyPressMsg{Text: k}
-		if len(k) == 1 {
-			msg.Code = rune(k[0])
-		}
-		switch k {
-		case "enter":
-			msg = tea.KeyPressMsg{Code: tea.KeyEnter}
-		case "esc":
-			msg = tea.KeyPressMsg{Code: tea.KeyEscape}
-		case "space":
-			msg = tea.KeyPressMsg{Code: tea.KeySpace, Text: " "}
-		case "backspace":
-			msg = tea.KeyPressMsg{Code: tea.KeyBackspace}
-		}
-		if strings.HasPrefix(k, "ctrl+") {
-			msg = tea.KeyPressMsg{Code: rune(k[len(k)-1]), Mod: tea.ModCtrl}
-		}
-		_, last = m.handleKey(msg)
+		_, last = m.handleKey(keyPress(k))
 	}
 	return last
 }

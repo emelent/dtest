@@ -9,6 +9,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"dtest/internal/config"
 	"dtest/internal/dotnet"
 	"dtest/internal/ui"
 )
@@ -32,6 +33,9 @@ Flags:
   --no-build                 never build; list and run against existing binaries
   --nvim-socket path         Neovim server socket for "o"; defaults to $nvim_sock. Without a
                              listening server, "o" opens nvim in this terminal
+  --config path              TOML file rebinding keys and repainting colours; defaults to
+                             $DTEST_CONFIG, else dtest/config.toml under $XDG_CONFIG_HOME
+                             or ~/.config. A missing file is not an error
   -V, --version              print the version and exit
   -h, --help                 show this help
 `)
@@ -40,6 +44,8 @@ Flags:
 func main() {
 	cfg := ui.Config{Version: version}
 	var help, showVersion bool
+	var configPath string
+	flag.StringVar(&configPath, "config", "", "")
 	flag.StringVar(&cfg.Options.Configuration, "c", "", "")
 	flag.StringVar(&cfg.Options.Configuration, "configuration", "", "")
 	flag.BoolVar(&cfg.Options.NoBuild, "no-build", false, "")
@@ -82,6 +88,14 @@ func main() {
 		os.Exit(2)
 	}
 
+	if configPath == "" {
+		configPath = config.Path()
+	}
+	if err := applyConfig(configPath); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+
 	model := ui.New(cfg)
 	final, err := tea.NewProgram(model).Run()
 	model.Shutdown()
@@ -93,4 +107,26 @@ func main() {
 		fmt.Fprintln(os.Stderr, fm.Fatal())
 		os.Exit(1)
 	}
+}
+
+// applyConfig reads the config file and hands its two tables to the UI. A
+// bad config stops the program rather than being ignored: a keymap or a
+// palette that silently half-applied would be harder to diagnose than a
+// message at startup.
+func applyConfig(path string) error {
+	c, err := config.Load(path)
+	if err != nil {
+		return err
+	}
+	keys := map[string][]string{}
+	for act, b := range c.Keys {
+		keys[act] = b
+	}
+	if err := ui.ApplyKeys(keys); err != nil {
+		return fmt.Errorf("%s: %w", path, err)
+	}
+	if err := ui.ApplyColors(c.Colors); err != nil {
+		return fmt.Errorf("%s: %w", path, err)
+	}
+	return nil
 }

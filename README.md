@@ -119,7 +119,8 @@ solution has none of those every project is listed.
 
 ## Keys
 
-Press `?` in the app for this list.
+Press `?` in the app for this list, which shows whatever keys are bound.
+All of them can be changed; see [Config](#config).
 
 | Key | Action |
 | --- | --- |
@@ -163,6 +164,55 @@ terminal's own red, green and yellow, which are meant to shout and would, on
 a screen that is mostly results. In the tree they are drawn a shade back
 again, and how many tests a row holds is grey, so the footer is the line
 that carries.
+
+## Config
+
+Both the keys and the colours can be changed from a TOML file. dtest reads
+`$DTEST_CONFIG` when that is set, otherwise `dtest/config.toml` under
+`$XDG_CONFIG_HOME` or `~/.config`; `--config path` overrides both. Having no
+config file is the normal case, not an error, and so is leaving out a table
+or an entry: whatever is missing keeps its default.
+
+```toml
+[keys]
+# An action's list replaces its default outright, so rebinding one never
+# disturbs another. One key or several; an empty list unbinds the action.
+quit      = ["q", "Q"]
+run-all   = "R"
+copy      = "y"
+expand-all = []
+
+[colors]
+# Either a 256-colour index or a #rrggbb hex.
+failed    = "#d78787"
+passed    = "108"
+skipped   = "137"
+running   = "6"
+dim       = "8"
+selection = "60"
+```
+
+The actions are `down`, `up`, `top`, `bottom`, `half-page-down`,
+`half-page-up`, `page-down`, `page-up`, `expand`, `collapse`, `expand-all`,
+`collapse-all`, `toggle-fold`, `filter`, `scroll-down`, `scroll-up`,
+`select`, `copy`, `switch-pane`, `run`, `run-all`, `run-failed`,
+`only-failed`, `only-skipped`, `clear`, `show-all`, `cancel`,
+`next-failure`, `previous-failure`, `open-in-editor`, `toggle-output`,
+`reload`, `help`, `quit` and `force-quit`. Key names are the ones bubbletea
+reports: a letter, or `enter`, `esc`, `space`, `tab`, `up`, `pgdown`,
+`ctrl+d`, `shift+tab` and so on. `top` is pressed twice, the way `gg` is.
+The filter prompt is not configurable: while it is open almost every key is
+text, and `enter`, `esc` and `backspace` mean there what they mean in any
+prompt.
+
+The colour roles are `passed`, `failed`, `skipped`, `running`, `dim` and
+`badge` for text, and `cursor`, `cursor-unfocused` and `selection` for the
+backgrounds painted behind a whole line. The help screen prints whatever is
+bound, so `?` always tells the truth about your own keys.
+
+A config that names an action or a colour that does not exist, or binds a
+key two actions both want, stops dtest at startup with a message saying
+which line is wrong. Nothing is half-applied.
 
 ## Neovim
 
@@ -225,5 +275,6 @@ main.go              flags, target discovery, tea.NewProgram
 internal/dotnet      solution/project discovery, --list-tests, streamed runs, TRX parsing, source lookup, filters
 internal/tree        solution → project → class → method → case nodes, status roll-up, durations, folding, visible rows
 internal/editor      Neovim hand-off (--remote-expr + tmux) and in-terminal launch
-internal/ui          the bubbletea model: three panes, keys, summary and status, output colouring
+internal/ui          the bubbletea model: two panes, actions and keymap, palette, summary and status, output colouring
+internal/config      the TOML file that rebinds keys and repaints colours
 ```
