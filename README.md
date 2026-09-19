@@ -71,9 +71,14 @@ ctrl+j/k for their own pane movement.
   carries it. What dtest is doing, and anything it has to say, takes that
   line while there is something to say, and the summary comes back after. So
   running one class reports that class. Projects start collapsed, so a fresh
-  tree is a list of them. After a run, passing classes fold to one line and
-  failing ones open, and a project is only ever opened by that, never folded
-  shut under you.
+  tree is a list of them. `i` focuses the view on the selected project or
+  class: it becomes the root of the tree, drawn flush, and from then on the
+  app behaves as though its tests were the only ones, down to what `A` runs
+  and where `n` looks for the next failure. `I` steps back out one level,
+  leaving the cursor on what was being looked at, and the tree's title says
+  what is in focus meanwhile. After a run, passing classes fold to one line
+  and failing ones open, and a project is only ever opened by that, never
+  folded shut under you.
 
 ## Features
 
@@ -133,9 +138,10 @@ All of them can be changed; see [Config](#config).
 | `y` | Copy the log line under the cursor |
 | `l` / `h` | Expand / collapse a project, class or theory (`h` on a collapsed node selects its parent) |
 | `L` / `H` | Expand / collapse the whole tree |
+| `i` / `I` | Focus on the selected project or class, treating its tests as the only ones; step back out |
 | `space` | Toggle a fold |
 | `enter`, `r` | Run the selected node; on the root that is the whole solution in one `dotnet test` |
-| `A` | Run the whole solution, the same as running the root |
+| `A` | Run the whole solution, or whatever is in focus, the same as running the root |
 | `F` | Re-run only the failed tests |
 | `f` / `s` | Show only the failed / skipped tests |
 | `a` | Show all tests again (`esc` does too) |
@@ -196,7 +202,8 @@ The actions are `down`, `up`, `top`, `bottom`, `half-page-down`,
 `half-page-up`, `page-down`, `page-up`, `expand`, `collapse`, `expand-all`,
 `collapse-all`, `toggle-fold`, `filter`, `scroll-down`, `scroll-up`,
 `select`, `copy`, `switch-pane`, `run`, `run-all`, `run-failed`,
-`only-failed`, `only-skipped`, `clear`, `show-all`, `cancel`,
+`only-failed`, `only-skipped`, `clear`, `show-all`, `cancel`, `focus`,
+`unfocus`,
 `next-failure`, `previous-failure`, `open-in-editor`, `toggle-output`,
 `reload`, `help`, `quit` and `force-quit`. Key names are the ones bubbletea
 reports: a letter, or `enter`, `esc`, `space`, `tab`, `up`, `pgdown`,

@@ -136,6 +136,9 @@ func (m *Model) logTitle() string {
 
 func (m *Model) treeTitle() string {
 	title := "Tests"
+	if m.zoom != nil {
+		title += "  in " + breadcrumb(m.zoom)
+	}
 	switch m.statusFilter {
 	case tree.StatusFailed:
 		title += "  failed only"
@@ -161,7 +164,7 @@ func (m *Model) refresh() {
 
 func (m *Model) refreshTree() {
 	keep := m.current()
-	m.rows = m.tree.Visible(m.query, m.statusFilter)
+	m.rows = m.visibleRows()
 	m.cursor = 0
 	// Keep the cursor on its node or, when a fold hid it, its nearest
 	// visible ancestor.
@@ -345,7 +348,7 @@ func (m *Model) renderLeafLog(n *tree.Node) []string {
 	case inFlight(n.Status()):
 		return []string{head} // the glyph in the header says it all
 	case r == nil:
-		return []string{head, "", styleDim.Render("  Not run yet. Press enter to run it, o to open it in nvim.")}
+		return []string{head, "", styleDim.Render("  Not run yet. Press " + keyFor(actRun) + " to run it, " + keyFor(actOpenInEditor) + " to open it in nvim.")}
 	case n.Status() == tree.StatusFailed:
 		return append([]string{head, ""}, m.renderFailure(n, true)...)
 	}
@@ -434,10 +437,17 @@ func highlight(line string, width int, bg string) string {
 // level that carries on further down. Projects are roots, so they get none.
 // It works off the visible rows, so a filtered tree still joins up.
 func treeGuides(rows []*tree.Node) []string {
+	// Depths are measured from the row the view is rooted at, which is the
+	// first one, so a focused subtree is drawn flush rather than carrying
+	// the indentation of where it sits in the whole tree.
+	base := 0
+	if len(rows) > 0 {
+		base = rows[0].Depth()
+	}
 	depth := make([]int, len(rows))
 	deepest := 0
 	for i, n := range rows {
-		depth[i] = n.Depth()
+		depth[i] = n.Depth() - base
 		deepest = max(deepest, depth[i])
 	}
 	// Backwards: a row is the last of its siblings unless a row at the same
@@ -742,8 +752,9 @@ var helpRows = []helpRow{
 	{[]Action{actSelect, actCopy}, "to select lines of the log and copy them; the mouse selects too"},
 	{[]Action{actExpand, actCollapse}, "to expand / collapse a project, class or theory"},
 	{[]Action{actExpandAll, actCollapseAll}, "to expand / collapse the whole tree"},
+	{[]Action{actFocus, actUnfocus}, "to focus on the selected project or class, treating its tests as the only ones, and to step back out"},
 	{[]Action{actRun}, "to run the selected project, class or test"},
-	{[]Action{actRunAll}, "to run the whole solution"},
+	{[]Action{actRunAll}, "to run the whole solution, or whatever is in focus"},
 	{[]Action{actRunFailed}, "to rerun only the failed tests"},
 	{[]Action{actOnlyFailed, actOnlySkipped}, "to show only the failed / skipped tests"},
 	{[]Action{actShowAll}, "to show all tests again (esc does too)"},
@@ -763,9 +774,9 @@ func (m *Model) renderHelp(height int) string {
 	for _, r := range helpRows {
 		fmt.Fprintf(&b, " %s %s %s\n", styleDim.Render("press"), styleKey.Render(fmt.Sprintf("%-16s", keysFor(r.acts...))), r.desc)
 	}
-	nvim := "o sends the file and line to the Neovim listening on " + m.socket + " (from $nvim_sock or --nvim-socket)"
+	nvim := keyFor(actOpenInEditor) + " sends the file and line to the Neovim listening on " + m.socket + " (from $nvim_sock or --nvim-socket)"
 	if m.socket == "" {
-		nvim = "$nvim_sock is not set, so o opens nvim in this terminal; set it to the socket of a Neovim started with --listen"
+		nvim = "$nvim_sock is not set, so " + keyFor(actOpenInEditor) + " opens nvim in this terminal; set it to the socket of a Neovim started with --listen"
 	}
 	b.WriteString("\n " + styleDim.Render(nvim) + "\n")
 	b.WriteString(" " + styleDim.Render("press any key to close this help"))

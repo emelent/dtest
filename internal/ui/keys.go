@@ -100,6 +100,10 @@ func (m *Model) handleTreeAction(act Action) (bool, tea.Cmd) {
 		}
 	case actFilter:
 		m.filtering = true
+	case actFocus:
+		return true, m.focusNode()
+	case actUnfocus:
+		return true, m.unfocusNode()
 	case actClear:
 		m.query = ""
 		m.statusFilter = tree.StatusNone
@@ -179,7 +183,9 @@ func (m *Model) handleCommonAction(act Action) (tea.Model, tea.Cmd) {
 			return m, m.enqueue([]*tree.Node{n})
 		}
 	case actRunAll:
-		return m, m.enqueue([]*tree.Node{m.tree.Root}) // the solution, in one run
+		// The solution in one run, or, with the view focused, whatever is
+		// in focus: there it stands in for the whole suite.
+		return m, m.enqueue([]*tree.Node{m.root()})
 	case actShowAll:
 		m.query = ""
 		m.statusFilter = tree.StatusNone

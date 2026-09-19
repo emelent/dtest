@@ -1334,3 +1334,85 @@ func TestTreeColoursAreDimmerThanTheFooter(t *testing.T) {
 		t.Error("a tree duration should be dimmer than a log one")
 	}
 }
+
+// i focuses the view on the selected subtree: it becomes the root of the
+// tree, drawn flush, and everything from running to jumping between
+// failures treats its tests as the only ones. o steps back out.
+func TestFocusSubtree(t *testing.T) {
+	f := stubRun(t)
+	m := newTestModel(t)
+	press(m, "j", "j") // MathTests
+	class := m.current()
+	press(m, "i")
+	if m.zoom != class || m.cursor != 0 || m.current() != class {
+		t.Fatalf("focus: zoom=%v cursor=%d", m.zoom, m.cursor)
+	}
+	want := []string{
+		"▾ MathTests (4 tests)",
+		"├─ · Adds",
+		"├─ · Fails",
+		"└─ ▸ Theory (2 tests)",
+	}
+	if got := treeRows(m); strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("focused tree = %q", got)
+	}
+	if !strings.Contains(m.treeTitle(), "in Alpha.Tests › MathTests") {
+		t.Errorf("the title should say what is in focus: %q", m.treeTitle())
+	}
+	// Running everything runs what is in focus, not the solution.
+	press(m, "A")
+	<-f.started
+	if f.filter != "FullyQualifiedName~Alpha.Tests.MathTests." {
+		t.Fatalf("run-all while focused = %q", f.filter)
+	}
+	f.emit(dotnet.DoneEvent{})
+	m.Update(<-m.runEvents())
+	// A failure outside the focus is out of reach.
+	waits := m.tree.Lookup(m.tree.Projects[0], "Alpha.Tests.SlowTests.Waits")
+	waits.Result = &dotnet.Result{Outcome: dotnet.OutcomeFailed, Message: "boom"}
+	waits.SetStatus(tree.StatusFailed)
+	press(m, "n")
+	if m.current() == waits || !strings.Contains(m.status, "No failed tests") {
+		t.Errorf("n should not leave the focus: on %q, status %q", m.current().Name, m.status)
+	}
+	// o steps out one level, back onto what was being looked at.
+	press(m, "I")
+	if m.zoom != m.tree.Projects[0] || m.current() != class {
+		t.Fatalf("out: zoom=%v on %q", m.zoom, m.current().Name)
+	}
+	press(m, "I")
+	if m.zoom != nil || m.current() != m.tree.Projects[0] {
+		t.Fatalf("out again: zoom=%v on %q", m.zoom, m.current().Name)
+	}
+	if got := treeRows(m); got[0] != "▾ Sample (1 project | 5 tests)" {
+		t.Errorf("the whole tree should be back: %q", got)
+	}
+	// Out at the top, and focusing a single test, are both no-ops.
+	press(m, "I")
+	if m.zoom != nil || !strings.Contains(m.status, "Not focused") {
+		t.Errorf("status = %q", m.status)
+	}
+	press(m, "j", "j", "l", "j", "i")
+	if m.zoom != nil || !strings.Contains(m.status, "Nothing to focus on") {
+		t.Errorf("focusing a test: zoom=%v status=%q", m.zoom, m.status)
+	}
+}
+
+// Relisting replaces the nodes under each project, so a focus is let go of
+// rather than left pointing at a subtree that is no longer in the tree.
+func TestFocusDroppedOnReload(t *testing.T) {
+	m := newTestModel(t)
+	listTests = func(ctx context.Context, project string, opts dotnet.Options) ([]string, error) {
+		return []string{"Alpha.Tests.MathTests.Adds"}, nil
+	}
+	t.Cleanup(func() { listTests = dotnet.ListTests })
+	m.cfg.Options.NoBuild = true
+	press(m, "j", "j", "i")
+	if m.zoom == nil {
+		t.Fatal("focused")
+	}
+	m.reload()
+	if m.zoom != nil {
+		t.Error("a reload should let the focus go")
+	}
+}

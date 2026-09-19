@@ -403,14 +403,20 @@ func indexTopLevel(s string, c byte) int {
 // Matching leaves bring their ancestors along regardless of expansion, and
 // projects without a match are left out.
 func (t *Tree) Visible(query string, status Status) []*Node {
-	if len(t.Projects) == 0 {
+	return t.VisibleFrom(t.Root, query, status)
+}
+
+// VisibleFrom is Visible over one subtree, for when the view is focused on
+// a project or a class and everything outside it is out of scope.
+func (t *Tree) VisibleFrom(from *Node, query string, status Status) []*Node {
+	if from == nil || len(t.Projects) == 0 {
 		return nil // nothing to root
 	}
 	q := strings.ToLower(query)
 	if q == "" && status == StatusNone {
-		return appendVisible(nil, t.Root)
+		return appendVisible(nil, from)
 	}
-	return appendMatching(nil, t.Root, q, status)
+	return appendMatching(nil, from, q, status)
 }
 
 func appendVisible(rows []*Node, n *Node) []*Node {

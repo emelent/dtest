@@ -31,6 +31,8 @@ const (
 	actCollapseAll Action = "collapse-all"
 	actToggleFold  Action = "toggle-fold"
 	actFilter      Action = "filter"
+	actFocus       Action = "focus" // treat one subtree as the whole suite
+	actUnfocus     Action = "unfocus"
 
 	// The log.
 	actScrollDown Action = "scroll-down"
@@ -77,6 +79,8 @@ var defaultKeys = map[Action][]string{
 	actCollapseAll: {"H"},
 	actToggleFold:  {"space"},
 	actFilter:      {"t", "/"},
+	actFocus:       {"i"},
+	actUnfocus:     {"I"},
 
 	actScrollDown: {"ctrl+e"},
 	actScrollUp:   {"ctrl+y"},

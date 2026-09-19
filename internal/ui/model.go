@@ -81,6 +81,7 @@ type Model struct {
 	tree   *tree.Tree
 	rows   []*tree.Node // the tree pane's rows
 	cursor int
+	zoom   *tree.Node // the subtree the view is focused on; nil for all of it
 
 	width, height int
 	focus         pane
@@ -236,6 +237,7 @@ func (m *Model) reload() tea.Cmd {
 	if m.building || m.loading > 0 {
 		return m.setStatus("Already loading", true)
 	}
+	m.zoom = nil // listing replaces the nodes it was pointing at
 	if m.cfg.Options.NoBuild {
 		return m.startListing()
 	}
@@ -564,7 +566,7 @@ func (m *Model) apply(target *tree.Node, r dotnet.Result) {
 func (m *Model) runFailed() tea.Cmd {
 	var nodes []*tree.Node
 	seen := map[*tree.Node]bool{}
-	for _, l := range m.tree.Leaves() {
+	for _, l := range m.root().Leaves() {
 		if l.Status() != tree.StatusFailed {
 			continue
 		}
@@ -818,7 +820,7 @@ func (m *Model) selectNode(n *tree.Node) {
 	for p := n.Parent; p != nil; p = p.Parent {
 		p.Expanded = true
 	}
-	m.rows = m.tree.Visible(m.query, m.statusFilter)
+	m.rows = m.visibleRows()
 	for i, r := range m.rows {
 		if r == n {
 			m.cursor = i
@@ -826,6 +828,54 @@ func (m *Model) selectNode(n *tree.Node) {
 		}
 	}
 	m.refresh()
+}
+
+// root is the node the view is rooted at: the subtree in focus, or the
+// solution when there is none.
+func (m *Model) root() *tree.Node {
+	if m.zoom != nil {
+		return m.zoom
+	}
+	return m.tree.Root
+}
+
+// visibleRows are the tree pane's rows, within whatever is in focus.
+func (m *Model) visibleRows() []*tree.Node {
+	return m.tree.VisibleFrom(m.root(), m.query, m.statusFilter)
+}
+
+// focusNode narrows the view to the selected node, so everything from the
+// rows on screen to what "run all" runs treats its tests as the only ones.
+// A leaf has nothing below it to focus on.
+func (m *Model) focusNode() tea.Cmd {
+	n := m.current()
+	switch {
+	case n == nil:
+		return nil
+	case n.IsLeaf():
+		return m.setStatus("Nothing to focus on under "+n.Name, true)
+	case n == m.zoom:
+		return m.setStatus("Already focused on "+n.Name, false)
+	}
+	m.zoom = n
+	n.Expanded = true
+	m.cursor = 0
+	m.refresh()
+	return nil
+}
+
+// unfocusNode steps back out one level, to the parent of what is in focus,
+// and leaves the cursor on the subtree that was being looked at.
+func (m *Model) unfocusNode() tea.Cmd {
+	if m.zoom == nil {
+		return m.setStatus("Not focused on anything", false)
+	}
+	was := m.zoom
+	if m.zoom = was.Parent; m.zoom == m.tree.Root {
+		m.zoom = nil
+	}
+	m.selectNode(was)
+	return nil
 }
 
 // filtered reports whether the tree is narrowed by a query or a status, in
@@ -847,7 +897,7 @@ func (m *Model) toggleStatusFilter(status tree.Status) {
 // nextFailed moves the tree cursor to the next (or previous) failed test in
 // tree order, wrapping around.
 func (m *Model) nextFailed(forward bool) tea.Cmd {
-	leaves := m.tree.Leaves()
+	leaves := m.root().Leaves()
 	start := -1
 	if cur := m.current(); cur != nil {
 		for i, l := range leaves {
