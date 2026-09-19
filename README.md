@@ -12,13 +12,19 @@ while the screen updates live.
   × Shop.Api.Tests (16 tests | 1 failed | 1 skipped) 1.1s
 
    FAIL  Shop.Api.Tests › Middleware.RateLimitMiddlewareTests › OverLimit_Returns429 0.001s
-Assert.Equal() Failure: Values differ
-Expected: 429
-Actual:   428
- ❯ tests/Shop.Api.Tests/Middleware/RateLimitMiddlewareTests.cs:12
 
+    Assert.Equal() Failure: Values differ
+    Expected: 429
+    Actual:   428
+    ❯ tests/Shop.Api.Tests/Middleware/RateLimitMiddlewareTests.cs:12
 
-
+      10 │         var app = Build(limit: 1);
+      11 │         await app.Get("/orders");
+    > 12 │         Assert.Equal(429, (await app.Get("/orders")).Status);
+         │         ^
+      13 │     }
+      14 │
+      15 │     [Fact]
 ⎯⎯ Tests ⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
   ▾ Shop (2 projects | 49 tests)
   ├─ ▾ Shop.Api.Tests (16 tests | 1 failed | 1 skipped) 1.1s
@@ -41,10 +47,10 @@ ctrl+j/k for their own pane movement.
 
 - **Log** (top, about 70% of the height) shows the results of whatever the
   tree selects. For a test: its verdict, message (expected values green,
-  actual values red), failing location, stack trace and captured output. For
-  the solution, a project, a class or a theory: every failure beneath it,
-  without the tally, which the tree row it was selected from already
-  carries. Build errors show first. Long lines wrap. With the log focused,
+  actual values red, an exception split from its type), failing location,
+  the source around it, stack trace and captured output. For the solution, a project, a class or a theory:
+  every failure beneath it, without the tally, which the tree row it was
+  selected from already carries. Build errors show first. Long lines wrap. With the log focused,
   `j`/`k`, `gg`/`G` and `ctrl+d`/`ctrl+u` move a cursor line through it, and
   `ctrl+e`/`ctrl+y` scroll without moving it. `v` swaps in the raw `dotnet`
   output of the selected project, coloured by kind. `V` starts a linewise
@@ -161,8 +167,38 @@ All of them can be changed; see [Config](#config).
 Runs use `dotnet test --filter`: `FullyQualifiedName~Ns.Class.` for a class
 and `FullyQualifiedName=Ns.Class.Method` for a method. A theory row cannot
 be addressed on its own, so running one runs its method. Results come from
-the console logger as they happen and from a TRX file when the run ends, so
-a test that was not listed (added since the last reload) still appears.
+the console logger as they happen and from the TRX files when the run ends,
+so a test that was not listed (added since the last reload) still appears.
+The console logger gives a name and an outcome; the message and stack trace
+a failure needs for its details come only from the TRX. Running the solution
+is one `dotnet test` over the whole thing, and every test project writes its
+own results file into the same directory, so dtest lets the logger name them
+and reads all of them — naming the file itself would have each project
+overwrite the last and leave the others' failures with no details.
+
+A test that fails by throwing is described by its exception, the way one
+that fails an assertion is described by the comparison: the type carries the
+line in bold and its message follows, an inner exception hangs off a dimmed
+`----`, and the code frame lands on the `throw` — or, when the exception came
+from further down, on the deepest frame the stack trace gives a file and a
+line for, which is where it actually went wrong rather than where the test
+called in.
+
+A failure is headed by its `FAIL` line and breadcrumb; everything under it
+— the message, the location, the code frame, the stack trace and the
+captured output — is set in by four columns and separated from the header by
+a blank line, so a group's log reads as a run of blocks rather than one
+wall of text.
+
+Every failure is followed by a code frame, as jest and vitest print one:
+the six lines of source around the offending line, two above it and three
+below, in a gutter of line numbers. The failing line is marked with a `>`
+and drawn at full weight with its neighbours dimmed behind it, and a caret
+underneath points at where its statement starts — a .NET stack trace names a
+line but never a column, so the caret marks the line rather than claiming a
+precision the trace does not have. The frame is left out when the source
+cannot be read, which is what a test run on another machine looks like;
+the location line above it stays either way.
 
 Durations are `0.032s` below a second, `1.5s` below ten, `35s` below a
 minute, then `2m34s`. They are coloured as vitest colours them: green up to

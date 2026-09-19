@@ -42,7 +42,12 @@ Five packages. The dependency direction is one way: `ui` → `tree`, `dotnet`,
 - **`internal/dotnet`** wraps the CLI. Finds solutions and projects, lists
   tests (`dotnet test --list-tests`), runs them, and parses results twice
   over: from the console logger line by line as they happen
-  (`ParseResultLine`) and from the TRX file when the run ends. A run emits
+  (`ParseResultLine`) and from the TRX files when the run ends — plural,
+  because a solution-wide run has every test project write its own into the
+  results directory, so `Run` passes the trx logger no `LogFileName` (a name
+  of ours is shared, and each project overwrites the last) and `readTRXDir`
+  reads the lot. Only the TRX carries a failure's message and stack trace,
+  so losing one costs that project its failure details. A run emits
   `LineEvent`, `ResultEvent` and finally `DoneEvent` through a callback.
   `source.go` greps the sources to locate a test's declaration for the
   editor hand-off.

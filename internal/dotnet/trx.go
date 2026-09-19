@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -30,6 +32,34 @@ type trxResult struct {
 			StackTrace string `xml:"StackTrace"`
 		} `xml:"ErrorInfo"`
 	} `xml:"Output"`
+}
+
+// readTRXDir parses every results file dotnet left in dir. A run over a
+// solution writes one per test project, so the run's results are all of them
+// together. No files at all yields nil results and a nil error, since dotnet
+// writes none when the run never started. One unreadable file costs only its
+// own results: the rest of the projects still reported, and losing their
+// failures' messages to a neighbour's bad XML would be the very thing this
+// is here to prevent.
+func readTRXDir(dir string) ([]Result, error) {
+	paths, err := filepath.Glob(filepath.Join(dir, "*.trx"))
+	if err != nil || len(paths) == 0 {
+		return nil, err
+	}
+	sort.Strings(paths) // so a run reports in the same order twice
+	var all []Result
+	var firstErr error
+	for _, path := range paths {
+		results, err := readTRX(path)
+		if err != nil {
+			if firstErr == nil {
+				firstErr = err
+			}
+			continue
+		}
+		all = append(all, results...)
+	}
+	return all, firstErr
 }
 
 // readTRX parses the results file at path. A missing file yields nil results

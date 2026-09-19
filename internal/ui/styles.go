@@ -96,6 +96,8 @@ const (
 	iconNone    = "·"
 	iconQueued  = "⧗" // an hourglass: scheduled in a run that has not started
 	iconArrow   = "❯" // marks a source location line in the log
+	iconFrame   = ">" // marks the failing line of a code frame, as jest does
+	iconCaret   = "^" // points at it from the line below
 	iconOpen    = "▾" // an expanded project, class or theory
 	iconClosed  = "▸" // a collapsed one
 	rule        = "⎯"

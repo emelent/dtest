@@ -3,6 +3,8 @@ package ui
 import (
 	"fmt"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -10,6 +12,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
+	"dtest/internal/dotnet"
 	"dtest/internal/tree"
 )
 
@@ -347,7 +350,7 @@ func (m *Model) renderLeafLog(n *tree.Node) []string {
 	default:
 		lines = append(lines, "  "+stylePassed.Render(iconPassed+" Passed in "+formatDuration(r.Duration)))
 	}
-	return append(lines, outputLines(r.Output)...)
+	return append(lines, outputLines("  ", r.Output)...)
 }
 
 // inFlight reports whether a node's tests are still running or waiting to,
@@ -356,36 +359,122 @@ func inFlight(s tree.Status) bool {
 	return s == tree.StatusRunning || s == tree.StatusQueued
 }
 
-// renderFailure is one failed test: FAIL badge and breadcrumb, the message
-// with its assertion coloured, the failing location and, in full, the
-// stack trace and captured output.
+// failIndent sets a failure's details in from the FAIL line that heads them.
+// A group's log is a run of these blocks, and the header has to be findable
+// by eye: indented details give it a left edge of its own to stand on.
+const failIndent = "    "
+
+// renderFailure is one failed test: FAIL badge and breadcrumb, then, set in
+// under it, the message with its assertion coloured, the failing location
+// and the source around it, and in full the stack trace and captured output.
 func (m *Model) renderFailure(l *tree.Node, full bool) []string {
 	r := l.Result
-	lines := []string{"  " + badgeFail.Render("FAIL") + " " + styleBold.Render(breadcrumb(l)) + " " + renderDuration(r.Duration)}
+	lines := []string{
+		"  " + badgeFail.Render("FAIL") + " " + styleBold.Render(breadcrumb(l)) + " " + renderDuration(r.Duration),
+		"",
+	}
 	for _, ml := range strings.Split(strings.TrimRight(r.Message, "\n"), "\n") {
-		lines = append(lines, colorMessage(ml))
+		lines = append(lines, failIndent+colorMessage(ml))
 	}
 	if loc, ok := r.FailureLocation(); ok {
-		lines = append(lines, styleLocation.Render(fmt.Sprintf(" %s %s:%d", iconArrow, displayPath(loc.File), loc.Line)))
+		lines = append(lines, failIndent+styleLocation.Render(fmt.Sprintf("%s %s:%d", iconArrow, displayPath(loc.File), loc.Line)))
+		if frame := m.renderFrame(loc); len(frame) > 0 {
+			lines = append(lines, "")
+			lines = append(lines, frame...)
+		}
 	}
 	if full && r.StackTrace != "" {
-		lines = append(lines, "", styleDim.Render("  Stack trace"))
+		lines = append(lines, "", failIndent+styleDim.Render("Stack trace"))
 		for _, sl := range strings.Split(r.StackTrace, "\n") {
-			lines = append(lines, styleDim.Render(sl))
+			lines = append(lines, failIndent+styleDim.Render(sl))
 		}
 	}
 	if full {
-		lines = append(lines, outputLines(r.Output)...)
+		lines = append(lines, outputLines(failIndent, r.Output)...)
 	}
 	return lines
 }
 
-func outputLines(output string) []string {
+// Code frames.
+
+// How much source a frame shows, which is jest's and vitest's six lines:
+// two above the failing one, the line itself, and three below.
+const (
+	frameAbove = 2
+	frameBelow = 3
+)
+
+// frameBar separates the gutter from the code, as jest's "|" does.
+const frameBar = " │ "
+
+// renderFrame is the source around a failure, drawn as a code frame: a
+// gutter of line numbers with the failing line marked and lit, its
+// neighbours dimmed behind it, and a caret underneath. A .NET stack frame
+// carries no column, so the caret sits under the start of the statement
+// rather than claiming a precision the trace does not have. Nothing is drawn
+// when the file cannot be read, which is the normal case for a test run on
+// another machine.
+func (m *Model) renderFrame(loc dotnet.Location) []string {
+	ex, ok := m.excerpt(loc)
+	if !ok {
+		return nil
+	}
+	gutter := len(strconv.Itoa(ex.First + len(ex.Lines) - 1))
+	bar := styleRule.Render(frameBar)
+	// The marker sits in a column of its own, left of the numbers, so they
+	// stay in line whether or not a row carries it.
+	blank := failIndent + strings.Repeat(" ", len(iconFrame)+1)
+	lines := make([]string, 0, len(ex.Lines)+1)
+	for i, src := range ex.Lines {
+		num := fmt.Sprintf("%*d", gutter, ex.First+i)
+		if i != ex.Focus {
+			lines = append(lines, blank+styleDim.Render(num)+bar+styleDim.Render(src))
+			continue
+		}
+		lines = append(lines, failIndent+styleFailed.Bold(true).Render(iconFrame)+" "+styleFailed.Render(num)+bar+src)
+		if col := indentOf(src); col >= 0 {
+			lines = append(lines, blank+strings.Repeat(" ", gutter)+bar+strings.Repeat(" ", col)+styleFailed.Render(iconCaret))
+		}
+	}
+	return lines
+}
+
+// excerpt is the source around loc, read once and kept. The log is rebuilt on
+// every spinner tick, and a failing class draws a frame per failure, so
+// without this a run would reopen the same files many times a second.
+func (m *Model) excerpt(loc dotnet.Location) (dotnet.Excerpt, bool) {
+	key := fmt.Sprintf("%s:%d", loc.File, loc.Line)
+	if c, seen := m.excerpts[key]; seen {
+		return c.ex, c.ok
+	}
+	ex, ok := readExcerpt(loc.File, loc.Line, frameAbove, frameBelow)
+	if m.excerpts == nil {
+		m.excerpts = map[string]cachedExcerpt{}
+	}
+	m.excerpts[key] = cachedExcerpt{ex: ex, ok: ok}
+	return ex, ok
+}
+
+// indentOf is how far a line is indented, or -1 when it holds nothing to
+// point at.
+func indentOf(s string) int {
+	if i := strings.IndexFunc(s, func(r rune) bool { return r != ' ' }); i >= 0 {
+		return i
+	}
+	return -1
+}
+
+// outputLines is a test's captured output, set in by indent to sit under
+// whatever introduced it.
+func outputLines(indent, output string) []string {
 	if output == "" {
 		return nil
 	}
-	lines := []string{"", styleDim.Render("  Output")}
-	return append(lines, strings.Split(output, "\n")...)
+	lines := []string{"", indent + styleDim.Render("Output")}
+	for _, ol := range strings.Split(output, "\n") {
+		lines = append(lines, indent+ol)
+	}
+	return lines
 }
 
 // buildErrors keeps the error lines of a build log.
@@ -858,10 +947,41 @@ func colorAssertion(line string) (string, bool) {
 	return "", false
 }
 
+// exceptionHead matches the head of a .NET exception as the runners report
+// it: a fully qualified type, then a colon and the message. xUnit hangs each
+// inner exception off its own line behind a run of dashes. The separator and
+// the dashes are captured rather than reproduced, so the styled line still
+// strips back to exactly what dotnet said and copies out unchanged.
+var exceptionHead = regexp.MustCompile("^(-+ )?([A-Za-z_][\\w.+`]*Exception)( *: *)(.*)$")
+
+// colorException highlights the head of an uncaught exception the way the
+// two sides of an assertion are highlighted, since for a test that threw it
+// is the exception, not a comparison, that says what went wrong. The type is
+// the part worth reading first, so it carries the line in bold, the message
+// follows in the failure colour, and the dashes of an inner exception are
+// dimmed so the chain reads as structure rather than as text.
+func colorException(line string) (string, bool) {
+	trimmed := strings.TrimLeft(line, " ")
+	indent := line[:len(line)-len(trimmed)]
+	m := exceptionHead.FindStringSubmatch(trimmed)
+	if m == nil {
+		return "", false
+	}
+	out := indent
+	if m[1] != "" {
+		out += styleDim.Render(m[1])
+	}
+	out += styleLogError.Bold(true).Render(m[2]) + styleLogError.Render(m[3]+m[4])
+	return out, true
+}
+
 // colorMessage styles one line of a failure message: assertion sides in
-// their colours, anything else red.
+// their colours, an exception split from its type, anything else red.
 func colorMessage(line string) string {
 	if s, ok := colorAssertion(line); ok {
+		return s
+	}
+	if s, ok := colorException(line); ok {
 		return s
 	}
 	return styleLogError.Render(line)

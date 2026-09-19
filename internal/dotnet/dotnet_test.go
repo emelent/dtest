@@ -1,6 +1,7 @@
 package dotnet
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -213,5 +214,113 @@ func TestLocate(t *testing.T) {
 	}
 	if _, ok := Locate(dir, "Alpha.Tests.Missing", "Adds"); ok {
 		t.Error("Missing should not be found")
+	}
+}
+
+func TestReadExcerpt(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "UnitTest1.cs")
+	var src strings.Builder
+	for n := 1; n <= 10; n++ {
+		fmt.Fprintf(&src, "line %d\n", n)
+	}
+	os.WriteFile(path, []byte(src.String()), 0o644)
+
+	ex, ok := ReadExcerpt(path, 6, 2, 3)
+	if !ok || ex.First != 4 || ex.Focus != 2 || len(ex.Lines) != 6 || ex.Lines[ex.Focus] != "line 6" {
+		t.Fatalf("middle of the file: %+v %v", ex, ok)
+	}
+	// Both ends are clamped, and the focus moves with the start.
+	if ex, ok := ReadExcerpt(path, 1, 2, 3); !ok || ex.First != 1 || ex.Focus != 0 || len(ex.Lines) != 4 {
+		t.Errorf("first line: %+v %v", ex, ok)
+	}
+	if ex, ok := ReadExcerpt(path, 10, 2, 3); !ok || ex.First != 8 || ex.Focus != 2 || len(ex.Lines) != 3 {
+		t.Errorf("last line: %+v %v", ex, ok)
+	}
+	// A line past the end of the file, as a stale stack trace names, is a miss.
+	if _, ok := ReadExcerpt(path, 11, 2, 3); ok {
+		t.Error("line 11 of a 10-line file should not be found")
+	}
+	if _, ok := ReadExcerpt(filepath.Join(dir, "Gone.cs"), 3, 2, 3); ok {
+		t.Error("a missing file should not be found")
+	}
+	if _, ok := ReadExcerpt(path, 0, 2, 3); ok {
+		t.Error("line 0 should not be found")
+	}
+	// Tabs are expanded so the gutter and the caret line up with the code.
+	os.WriteFile(path, []byte("\tif (x)\n\t\tAssert.True(y);\n"), 0o644)
+	if ex, ok := ReadExcerpt(path, 2, 1, 0); !ok || ex.Lines[0] != "    if (x)" || ex.Lines[1] != "        Assert.True(y);" {
+		t.Errorf("tabs: %q %v", ex.Lines, ok)
+	}
+}
+
+// A .NET stack trace lists the innermost frame first, so an exception thrown
+// below the test points at where it was thrown rather than where the test
+// called in. Frames without source information are stepped over.
+func TestFailureLocationPicksTheThrowSite(t *testing.T) {
+	r := Result{StackTrace: strings.Join([]string{
+		"   at System.Linq.ThrowHelper.ThrowNoElementsException()",
+		"   at Shop.Core.Pricing.Money.Add(Money other) in /src/Shop.Core/Pricing/Money.cs:line 12",
+		"   at Shop.Core.Tests.MoneyTests.Add_Mismatched() in /tests/Shop.Core.Tests/MoneyTests.cs:line 20",
+	}, "\n")}
+	if loc, ok := r.FailureLocation(); !ok || loc.File != "/src/Shop.Core/Pricing/Money.cs" || loc.Line != 12 {
+		t.Errorf("FailureLocation = %+v %v, want the throw site", loc, ok)
+	}
+	if _, ok := (Result{StackTrace: "   at System.Linq.ThrowHelper.ThrowNoElementsException()"}).FailureLocation(); ok {
+		t.Error("a stack trace with no source information has no location")
+	}
+}
+
+// A run over a solution leaves one results file per test project, so all of
+// them are read. This is what keeps a failure in one project from losing its
+// message and stack trace to another project finishing later.
+func TestReadTRXDir(t *testing.T) {
+	dir := t.TempDir()
+	if results, err := readTRXDir(dir); results != nil || err != nil {
+		t.Errorf("empty directory = %v %v", results, err)
+	}
+	// The names are the ones dotnet's trx logger picks when it is given no
+	// LogFileName, including the suffix it adds to avoid a collision.
+	write := func(name, body string) {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	other := strings.ReplaceAll(sampleTRX, "Alpha.Tests.MathTests", "Beta.Tests.ApiTests")
+	write("_Mac_2026-09-19_23_50_33.trx", sampleTRX)
+	write("_Mac_2026-09-19_23_50_33[1].trx", other)
+	write("notes.txt", "not a results file")
+
+	results, err := readTRXDir(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(results) != 6 {
+		t.Fatalf("got %d results from two files, want 6", len(results))
+	}
+	// Both projects' failures keep the detail the console logger cannot give.
+	failed := map[string]Result{}
+	for _, r := range results {
+		if r.Outcome == OutcomeFailed {
+			failed[r.Name] = r
+		}
+	}
+	for _, name := range []string{"Alpha.Tests.MathTests.Fails", "Beta.Tests.ApiTests.Fails"} {
+		r, ok := failed[name]
+		if !ok {
+			t.Fatalf("%s missing from %v", name, failed)
+		}
+		if r.Message == "" || r.StackTrace == "" {
+			t.Errorf("%s has no details: %+v", name, r)
+		}
+	}
+	// A file that will not parse costs only its own results.
+	write("broken.trx", "<TestRun><Results>truncated")
+	results, err = readTRXDir(dir)
+	if err == nil {
+		t.Error("the unreadable file should be reported")
+	}
+	if len(results) != 6 {
+		t.Errorf("got %d results alongside a broken file, want the other 6", len(results))
 	}
 }

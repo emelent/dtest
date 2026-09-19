@@ -2,7 +2,10 @@ package ui
 
 import (
 	"context"
+	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"reflect"
 	"strings"
 	"testing"
@@ -1497,5 +1500,166 @@ func TestMouseNavigation(t *testing.T) {
 	// there still does something sensible.
 	if m.paneAt(0) != paneLog || m.paneAt(m.height-1) != paneLog {
 		t.Error("the header and footer fall back to the focused pane")
+	}
+}
+
+// A failure shows the source around the offending line as a code frame, in
+// jest's shape: six lines, a gutter of numbers, the failing one marked and
+// carrying a caret. A stack trace naming a file that is not there falls back
+// to the location line alone.
+func TestFailureCodeFrame(t *testing.T) {
+	m := newTestModel(t)
+	path := filepath.Join(t.TempDir(), "UnitTest1.cs")
+	var src strings.Builder
+	for n := 1; n <= 20; n++ {
+		fmt.Fprintf(&src, "    line %d;\n", n)
+	}
+	if err := os.WriteFile(path, []byte(src.String()), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fails := m.tree.Lookup(m.tree.Projects[0], "Alpha.Tests.MathTests.Fails")
+	fails.Result = &dotnet.Result{
+		Outcome:    dotnet.OutcomeFailed,
+		Message:    "Assert.True() Failure",
+		StackTrace: "   at Alpha.Tests.MathTests.Fails() in " + path + ":line 12",
+	}
+	fails.SetStatus(tree.StatusFailed)
+	m.selectNode(fails)
+
+	// The FAIL line stands clear of what follows it, and the details are set
+	// in under it.
+	for i, l := range m.logLines {
+		if !strings.Contains(l, "FAIL ") {
+			continue
+		}
+		if m.logLines[i+1] != "" || m.logLines[i+2] != failIndent+"Assert.True() Failure" {
+			t.Errorf("under the FAIL line: %q then %q", m.logLines[i+1], m.logLines[i+2])
+		}
+		break
+	}
+	want := []string{
+		"      10 │     line 10;",
+		"      11 │     line 11;",
+		"    > 12 │     line 12;",
+		"         │     ^",
+		"      13 │     line 13;",
+		"      14 │     line 14;",
+		"      15 │     line 15;",
+	}
+	if got := frameLines(m); strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("frame =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+	// The frame is part of the class's log too, where the stack trace is not.
+	m.selectNode(fails.Parent)
+	if got := frameLines(m); len(got) != len(want) {
+		t.Errorf("the class's log should carry the frame, got %q", got)
+	}
+	fails.Result.StackTrace = "   at Alpha.Tests.MathTests.Fails() in /nowhere/Gone.cs:line 12"
+	m.excerpts = nil
+	m.selectNode(fails)
+	if got := frameLines(m); len(got) != 0 {
+		t.Errorf("a missing source should draw no frame, got %q", got)
+	}
+	containsAll(t, view(m), "❯ /nowhere/Gone.cs:12")
+}
+
+// frameLines are the code-frame rows of the log, as plain text.
+func frameLines(m *Model) []string {
+	var out []string
+	for _, l := range m.logLines {
+		if strings.Contains(l, frameBar) {
+			out = append(out, strings.TrimRight(l, " "))
+		}
+	}
+	return out
+}
+
+// A test that threw gets the same treatment a failed assertion gets: the
+// exception type carries the line, its message follows, and the dashes of an
+// inner exception mark the chain. Whatever the styling, the text has to come
+// back unchanged, since the log is what `y` copies.
+func TestExceptionDetails(t *testing.T) {
+	cases := []struct {
+		line string
+		want []string // the pieces, each in the style it should carry
+	}{
+		{
+			"System.NotImplementedException : The method or operation is not implemented.",
+			[]string{
+				styleLogError.Bold(true).Render("System.NotImplementedException"),
+				styleLogError.Render(" : The method or operation is not implemented."),
+			},
+		},
+		{
+			// MSTest closes up the colon; NUnit and xUnit space it out.
+			"System.InvalidOperationException: Cannot add USD to ZAR",
+			[]string{
+				styleLogError.Bold(true).Render("System.InvalidOperationException"),
+				styleLogError.Render(": Cannot add USD to ZAR"),
+			},
+		},
+		{
+			"---- System.ArgumentException : the inner cause",
+			[]string{
+				styleDim.Render("---- "),
+				styleLogError.Bold(true).Render("System.ArgumentException"),
+				styleLogError.Render(" : the inner cause"),
+			},
+		},
+	}
+	for _, c := range cases {
+		got := colorMessage(c.line)
+		if got != strings.Join(c.want, "") {
+			t.Errorf("colorMessage(%q) =\n%q\nwant\n%q", c.line, got, strings.Join(c.want, ""))
+		}
+		if plain := ansi.Strip(got); plain != c.line {
+			t.Errorf("styling changed the text: %q -> %q", c.line, plain)
+		}
+	}
+	// An assertion still reads as an assertion, and a line that merely names
+	// a type is not an exception head.
+	if got := colorMessage("Actual:   typeof(System.InvalidOperationException)"); got != styleActual.Render("Actual:   typeof(System.InvalidOperationException)") {
+		t.Errorf("assertion side = %q", got)
+	}
+	for _, l := range []string{"Assert.Equal() Failure: Values differ", "   at Shop.Core.Money.Add(Money other)", "The test threw System.Exception : boom"} {
+		if got := colorMessage(l); got != styleLogError.Render(l) {
+			t.Errorf("colorMessage(%q) = %q, want plain red", l, got)
+		}
+	}
+}
+
+// A test that failed by throwing shows the exception as its details, with a
+// code frame on the throw, exactly as an assertion failure does.
+func TestThrownExceptionIsTheDetail(t *testing.T) {
+	m := newTestModel(t)
+	path := filepath.Join(t.TempDir(), "OrdersControllerTests.cs")
+	src := "public class OrdersControllerTests\n{\n    [Fact]\n    public async Task Get_Paginates()\n    {\n        throw new NotImplementedException();\n        await Task.Delay(300);\n        Assert.Equal(20, Page().Count());\n    }\n}\n"
+	if err := os.WriteFile(path, []byte(src), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	fails := m.tree.Lookup(m.tree.Projects[0], "Alpha.Tests.MathTests.Fails")
+	fails.Result = &dotnet.Result{
+		Outcome:    dotnet.OutcomeFailed,
+		Message:    "System.NotImplementedException : The method or operation is not implemented.",
+		StackTrace: "   at Alpha.Tests.MathTests.Fails() in " + path + ":line 6\n--- End of stack trace from previous location ---",
+	}
+	fails.SetStatus(tree.StatusFailed)
+	m.selectNode(fails)
+
+	containsAll(t, view(m),
+		failIndent+"System.NotImplementedException : The method or operation is not implemented.",
+		"❯ "+path+":6",
+	)
+	want := []string{
+		"      4 │     public async Task Get_Paginates()",
+		"      5 │     {",
+		"    > 6 │         throw new NotImplementedException();",
+		"        │         ^",
+		"      7 │         await Task.Delay(300);",
+		"      8 │         Assert.Equal(20, Page().Count());",
+		"      9 │     }",
+	}
+	if got := frameLines(m); strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("frame =\n%s\nwant\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
 	}
 }

@@ -7,7 +7,6 @@ import (
 	"io"
 	"os"
 	"os/exec"
-	"path/filepath"
 	"regexp"
 	"strconv"
 	"strings"
@@ -70,8 +69,9 @@ type LineEvent struct{ Text string }
 // the run progresses. The final results come with DoneEvent.
 type ResultEvent struct{ Result Result }
 
-// DoneEvent ends a run. Results are the outcomes read from the TRX file and
-// are nil when dotnet did not write one, for example after a build failure.
+// DoneEvent ends a run. Results are the outcomes read from the TRX files —
+// one per test project, so a solution leaves several — and are nil when
+// dotnet wrote none, for example after a build failure.
 // Err is set when the process could not run or was cancelled; a run with
 // failing tests exits non-zero but that alone is not reported as an error.
 type DoneEvent struct {
@@ -99,11 +99,18 @@ func run(ctx context.Context, project, filter string, opts Options, emit func(Ev
 		return DoneEvent{Err: err}
 	}
 	defer os.RemoveAll(dir)
-	const trxName = "results.trx"
 	args := []string{
 		"test", project, "--nologo",
 		"--logger", "console;verbosity=normal",
-		"--logger", "trx;LogFileName=" + trxName,
+		// Deliberately no LogFileName: a run over a solution is one dotnet
+		// invocation covering every test project, and they all write into
+		// this directory, so a name of our choosing has each project
+		// overwrite the last. Only the project that finished last would keep
+		// its results, and every failure in the others would be left with
+		// what the console logger gives — a name and an outcome, no message
+		// and no stack trace, so no details and no code frame. The logger's
+		// own names are unique, and readTRXDir reads all of them.
+		"--logger", "trx",
 		"--results-directory", dir,
 	}
 	if filter != "" {
@@ -134,7 +141,7 @@ func run(ctx context.Context, project, filter string, opts Options, emit func(Ev
 	pw.Close()
 	<-done
 
-	results, trxErr := readTRX(filepath.Join(dir, trxName))
+	results, trxErr := readTRXDir(dir)
 	if ctx.Err() != nil {
 		return DoneEvent{Results: results, Err: fmt.Errorf("run cancelled")}
 	}

@@ -96,3 +96,65 @@ func simpleClassName(class string) string {
 	}
 	return class
 }
+
+// Excerpt is a run of consecutive source lines around a position, as a code
+// frame draws them.
+type Excerpt struct {
+	First int      // 1-based number of Lines[0]
+	Focus int      // index into Lines of the line the excerpt is centred on
+	Lines []string // the source, tabs expanded
+}
+
+// ReadExcerpt reads the lines of file around line: above of them before it
+// and below after, clamped to the start and the end of the file. It reports
+// false when the file cannot be read or is shorter than line, which is what
+// a stack trace from an older build looks like.
+func ReadExcerpt(file string, line, above, below int) (Excerpt, bool) {
+	if line < 1 {
+		return Excerpt{}, false
+	}
+	f, err := os.Open(file)
+	if err != nil {
+		return Excerpt{}, false
+	}
+	defer f.Close()
+	first, last := max(1, line-above), line+below
+	var lines []string
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 0, 64*1024), 4*1024*1024)
+	for n := 1; n <= last && sc.Scan(); n++ {
+		if n >= first {
+			lines = append(lines, expandTabs(sc.Text()))
+		}
+	}
+	// The focus line itself has to be there; a frame around nothing would
+	// point at whatever happens to be at the end of the file.
+	if line-first >= len(lines) {
+		return Excerpt{}, false
+	}
+	return Excerpt{First: first, Focus: line - first, Lines: lines}, true
+}
+
+// tabWidth is what a tab is expanded to. The frame is drawn into a fixed
+// gutter and its caret counts columns, so a tab left in the text would put
+// the two out of step with each other.
+const tabWidth = 4
+
+func expandTabs(s string) string {
+	if !strings.ContainsRune(s, '\t') {
+		return s
+	}
+	var b strings.Builder
+	col := 0
+	for _, r := range s {
+		if r != '\t' {
+			b.WriteRune(r)
+			col++
+			continue
+		}
+		pad := tabWidth - col%tabWidth
+		b.WriteString(strings.Repeat(" ", pad))
+		col += pad
+	}
+	return b.String()
+}

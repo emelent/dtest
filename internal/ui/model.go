@@ -29,6 +29,7 @@ var (
 	buildAll     = dotnet.Build
 	runTests     = dotnet.Run
 	locate       = dotnet.Locate
+	readExcerpt  = dotnet.ReadExcerpt
 	hasServer    = editor.HasServer
 	openInServer = editor.Open
 	lookPath     = exec.LookPath
@@ -123,6 +124,14 @@ type Model struct {
 	fatal        error
 
 	locations map[string]dotnet.Location
+	excerpts  map[string]cachedExcerpt // source around a failure, by "file:line"
+}
+
+// cachedExcerpt remembers one lookup, a miss included: a file that is not
+// there is worth not reopening on every redraw either.
+type cachedExcerpt struct {
+	ex dotnet.Excerpt
+	ok bool
 }
 
 // New returns a model for the solution or project in cfg.Target.
@@ -483,6 +492,9 @@ func (m *Model) pump() tea.Cmd {
 	}
 	req := m.queue[0]
 	m.queue = m.queue[1:]
+	// The sources may have been edited since the last run, which is usually
+	// why this one is happening, so the code frames are read again.
+	m.excerpts = nil
 	for _, l := range req.leaves {
 		l.SetStatus(tree.StatusRunning)
 	}
