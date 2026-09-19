@@ -318,8 +318,10 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.MouseWheelMsg:
+		// The wheel scrolls whatever is under the pointer, focused or not,
+		// so a glance at the other pane costs nothing.
 		var cmd tea.Cmd
-		if m.focus == paneLog {
+		if m.paneAt(msg.Y) == paneLog {
 			m.log, cmd = m.log.Update(msg)
 		} else {
 			m.treeView, cmd = m.treeView.Update(msg)
@@ -327,7 +329,7 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, cmd
 
 	case tea.MouseClickMsg:
-		return m, m.startSelect(msg.Y)
+		return m, m.mouseDown(msg.Y)
 
 	case tea.MouseMotionMsg:
 		return m, m.dragSelect(msg.Y)
@@ -693,10 +695,30 @@ func (m *Model) locateNode(n *tree.Node) (dotnet.Location, bool) {
 
 // Selecting and copying log lines.
 
+// logTop and treeTop are the first screen row of each pane's body: the
+// header and a title above the log, then the log and another title above
+// the tree.
+func (m *Model) logTop() int  { return headerH + titleH }
+func (m *Model) treeTop() int { return m.logTop() + m.log.Height() + titleH }
+
+// paneAt reports which pane covers a screen row, counting each pane's
+// title as part of it, and falls back to whichever pane has focus for the
+// header, the footer and anything off the screen.
+func (m *Model) paneAt(y int) pane {
+	switch {
+	case y >= m.logTop()-titleH && y < m.logTop()+m.log.Height():
+		return paneLog
+	case y >= m.treeTop()-titleH && y < m.treeTop()+m.treeView.Height():
+		return paneTree
+	}
+	return m.focus
+}
+
 // logLineAt maps a screen row to the log line drawn on it, or -1 when the
-// row is not part of the log's body.
+// row is not part of the log's body. A line that wrapped covers several
+// rows, so the last one that starts at or above this row is the answer.
 func (m *Model) logLineAt(y int) int {
-	top := headerH + titleH
+	top := m.logTop()
 	if y < top || y >= top+m.log.Height() || len(m.logStarts) == 0 {
 		return -1
 	}
@@ -711,17 +733,47 @@ func (m *Model) logLineAt(y int) int {
 	return line
 }
 
-// startSelect anchors a selection where the mouse went down, and moves the
-// log's cursor there. A press outside the log is left alone.
-func (m *Model) startSelect(y int) tea.Cmd {
-	line := m.logLineAt(y)
-	if line < 0 {
-		return nil
+// treeRowAt maps a screen row to the tree row drawn on it, or -1. Tree rows
+// are truncated rather than wrapped, so they are one row each.
+func (m *Model) treeRowAt(y int) int {
+	top := m.treeTop()
+	if y < top || y >= top+m.treeView.Height() {
+		return -1
 	}
-	m.focus = paneLog
-	m.dragging = true
-	m.selAnchor = line
-	m.logCursor = line
+	row := y - top + m.treeView.YOffset()
+	if row >= len(m.rows) {
+		return -1
+	}
+	return row
+}
+
+// mouseDown moves focus to the pane that was clicked and puts its cursor on
+// the row under the pointer. In the log that also anchors a selection, so a
+// drag from here picks out lines. In the tree, clicking the row that is
+// already selected folds it, which is how the mouse opens a project without
+// reaching for a key.
+func (m *Model) mouseDown(y int) tea.Cmd {
+	if m.help {
+		m.help = false
+	}
+	switch m.paneAt(y) {
+	case paneLog:
+		m.focus = paneLog
+		if line := m.logLineAt(y); line >= 0 {
+			m.dragging = true
+			m.selAnchor, m.logCursor = line, line
+		}
+	case paneTree:
+		m.focus = paneTree
+		if row := m.treeRowAt(y); row >= 0 {
+			if row == m.cursor {
+				if n := m.current(); n != nil && !n.IsLeaf() && !m.filtered() {
+					n.Expanded = !n.Expanded
+				}
+			}
+			m.cursor = row
+		}
+	}
 	m.refresh()
 	return nil
 }

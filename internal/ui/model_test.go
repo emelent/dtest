@@ -2,7 +2,6 @@ package ui
 
 import (
 	"context"
-	"fmt"
 	"os/exec"
 	"reflect"
 	"strings"
@@ -141,7 +140,7 @@ func TestLayoutAndNavigation(t *testing.T) {
 	}
 	v := view(m)
 	containsAll(t, v, "DTEST  Sample  v1.2.3", "⎯⎯ Log  Sample ⎯", "⎯⎯ Tests ⎯", "▾ Sample (1 project | 5 tests)", "▾ Alpha.Tests (5 tests)", "▸ MathTests (4 tests)", "Not run yet",
-		"nothing run yet", "press ? for help")
+		"nothing run yet", "DTEST  Sample  v1.2.3")
 	if strings.Contains(v, "Summary") || strings.Contains(v, "│") || strings.Contains(v, "Ready") || strings.Count(v, "DTEST") != 1 {
 		t.Errorf("one bottom pane and no extra text before the first run:\n%s", v)
 	}
@@ -162,8 +161,16 @@ func TestLayoutAndNavigation(t *testing.T) {
 	if !strings.Contains(lines[title+1], "▾ Sample") {
 		t.Errorf("the root should follow the title, got %q", lines[title+1])
 	}
-	if got := strings.TrimRight(lines[len(lines)-1], " "); got != footerRow(m) || !strings.HasSuffix(got, "press ? for help") {
+	if got := strings.TrimRight(lines[len(lines)-1], " "); got != footerRow(m) {
 		t.Errorf("footer = %q", got)
+	}
+	// The hint rides with the title at the top, at its far right, not with
+	// the run summary.
+	if !strings.HasSuffix(strings.TrimRight(lines[0], " "), "press ? for help") {
+		t.Errorf("header = %q", strings.TrimRight(lines[0], " "))
+	}
+	if strings.Contains(lines[len(lines)-1], "press ?") {
+		t.Errorf("the footer should be free of it: %q", lines[len(lines)-1])
 	}
 	// What dtest is doing takes the footer while it is doing it.
 	m.building = true
@@ -294,9 +301,6 @@ func TestPaneFocusAndLogScroll(t *testing.T) {
 	if m.focus != paneLog || m.logCursor != 2 || m.current() != fails {
 		t.Fatalf("j in the log moves its cursor: focus=%v cursor=%d", m.focus, m.logCursor)
 	}
-	if v := view(m); !strings.Contains(v, fmt.Sprintf(" 3/%d ⎯", len(m.logLines))) {
-		t.Fatalf("title should show the position:\n%s", v)
-	}
 	press(m, "G")
 	if m.logCursor != len(m.logLines)-1 || !m.log.AtBottom() {
 		t.Fatal("G moves to the last line and scrolls there")
@@ -325,10 +329,10 @@ func TestPaneFocusAndLogScroll(t *testing.T) {
 	if strings.Count(view(m), "word") != 40 {
 		t.Fatalf("every word of the wrapped message should be visible and whole, got %d", strings.Count(view(m), "word"))
 	}
-	// The position counts logical lines, not wrapped rows, and G still
-	// reaches the last one.
+	// The cursor counts logical lines, not wrapped rows, so G still reaches
+	// the last one.
 	press(m, "G")
-	if m.logCursor != len(m.logLines)-1 || !strings.Contains(view(m), fmt.Sprintf(" %d/%d ⎯", len(m.logLines), len(m.logLines))) {
+	if m.logCursor != len(m.logLines)-1 {
 		t.Fatalf("position after G: cursor %d of %d", m.logCursor, len(m.logLines))
 	}
 }
@@ -836,8 +840,11 @@ func TestPaneTitleRule(t *testing.T) {
 		if w := ansi.StringWidth(l); w != m.width {
 			t.Errorf("title is %d cells wide, want %d: %q", w, m.width, ansi.Strip(l))
 		}
-		if !strings.Contains(l, styleRule.Render(rule+rule)) {
+		if !strings.HasPrefix(l, styleRule.Render(rule+rule+" ")) {
 			t.Errorf("the rule should be faint: %q", l)
+		}
+		if strings.Contains(ansi.Strip(l), "/") {
+			t.Errorf("the title carries no line counter: %q", ansi.Strip(l))
 		}
 	}
 	if strings.Contains(titles[1], styleRule.Render("Tests")) {
@@ -923,10 +930,6 @@ func TestFooterLine(t *testing.T) {
 	m.refresh()
 	if !strings.Contains(last(), "FAIL") {
 		t.Errorf("an error carries the FAIL badge: %q", last())
-	}
-	// The hint stays put through all of it.
-	if !strings.HasSuffix(last(), "press ? for help") {
-		t.Errorf("the hint should hold its place: %q", last())
 	}
 	m.status = ""
 	m.refresh()
@@ -1414,5 +1417,65 @@ func TestFocusDroppedOnReload(t *testing.T) {
 	m.reload()
 	if m.zoom != nil {
 		t.Error("a reload should let the focus go")
+	}
+}
+
+// The mouse works the panes: a click moves focus and puts that pane's
+// cursor under the pointer, clicking a tree row again folds it, and the
+// wheel scrolls whichever pane the pointer is over rather than the focused
+// one.
+func TestMouseNavigation(t *testing.T) {
+	m := newTestModel(t)
+	press(m, "L") // everything open, so the tree is longer than its pane
+	click := func(y int) { m.Update(tea.MouseClickMsg{Y: y, Button: tea.MouseLeft}) }
+
+	// A click in the tree focuses it and selects the row under the pointer.
+	click(m.treeTop() + 2)
+	if m.focus != paneTree || m.current().Name != "MathTests" {
+		t.Fatalf("tree click: focus=%v on %q", m.focus, m.current().Name)
+	}
+	// Clicking the selected row folds it; clicking it again opens it.
+	before := len(m.rows)
+	click(m.treeTop() + 2)
+	if m.current().Expanded || len(m.rows) >= before {
+		t.Errorf("a second click should fold: %d rows, expanded=%v", len(m.rows), m.current().Expanded)
+	}
+	click(m.treeTop() + 2)
+	if !m.current().Expanded {
+		t.Error("and a third should open it again")
+	}
+	// A click in the log, or on either title, moves focus there.
+	click(m.logTop() + 1)
+	if m.focus != paneLog || m.logCursor != 1 {
+		t.Fatalf("log click: focus=%v cursor=%d", m.focus, m.logCursor)
+	}
+	click(m.treeTop() - titleH)
+	if m.focus != paneTree {
+		t.Error("clicking the tree's title should focus it")
+	}
+	click(m.logTop() - titleH)
+	if m.focus != paneLog {
+		t.Error("clicking the log's title should focus it")
+	}
+	// The wheel scrolls the pane under the pointer, leaving focus alone. A
+	// short window gives the tree more rows than it has room for.
+	m.Update(tea.WindowSizeMsg{Width: 140, Height: 20})
+	m.refresh()
+	if len(m.rows) <= m.treeView.Height() {
+		t.Fatalf("the tree needs to overflow to scroll: %d rows in %d", len(m.rows), m.treeView.Height())
+	}
+	m.focus = paneLog
+	m.treeView.GotoTop()
+	m.Update(tea.MouseWheelMsg{Y: m.treeTop() + 1, Button: tea.MouseWheelDown})
+	if m.treeView.YOffset() == 0 {
+		t.Error("the wheel over the tree should scroll it")
+	}
+	if m.focus != paneLog {
+		t.Error("and should not steal focus")
+	}
+	// Rows outside either pane belong to whichever has focus, so the wheel
+	// there still does something sensible.
+	if m.paneAt(0) != paneLog || m.paneAt(m.height-1) != paneLog {
+		t.Error("the header and footer fall back to the focused pane")
 	}
 }

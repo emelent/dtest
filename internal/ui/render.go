@@ -46,11 +46,11 @@ func (m *Model) View() tea.View {
 		return tea.NewView("")
 	}
 	g := m.layout()
-	top := lipgloss.JoinVertical(lipgloss.Left, m.paneTitle(m.logTitle(), m.focus == paneLog, m.width, m.logPosition()), m.log.View())
+	top := lipgloss.JoinVertical(lipgloss.Left, m.paneTitle(m.logTitle(), m.focus == paneLog, m.width), m.log.View())
 	if m.help {
-		top = lipgloss.JoinVertical(lipgloss.Left, m.paneTitle("Usage", true, m.width, ""), m.renderHelp(g.logH))
+		top = lipgloss.JoinVertical(lipgloss.Left, m.paneTitle("Usage", true, m.width), m.renderHelp(g.logH))
 	}
-	bottom := lipgloss.JoinVertical(lipgloss.Left, m.paneTitle(m.treeTitle(), m.focus == paneTree, m.width, ""), m.treeView.View())
+	bottom := lipgloss.JoinVertical(lipgloss.Left, m.paneTitle(m.treeTitle(), m.focus == paneTree, m.width), m.treeView.View())
 	content := lipgloss.JoinVertical(lipgloss.Left, m.renderHeader(), top, bottom, m.renderFooter())
 	v := tea.NewView(content)
 	v.AltScreen = true
@@ -59,33 +59,18 @@ func (m *Model) View() tea.View {
 	return v
 }
 
-// paneTitle is a ⎯⎯ Title ⎯⎯⎯ line with an optional note such as the cursor
-// position near the right end. The rule itself is faint so it only frames
-// the pane; the title carries the colour, bright when the pane is focused.
-func (m *Model) paneTitle(title string, focused bool, width int, note string) string {
+// paneTitle is a ⎯⎯ Title ⎯⎯⎯ line. The rule itself is faint so it only
+// frames the pane; the title carries the colour, bright when the pane is
+// focused.
+func (m *Model) paneTitle(title string, focused bool, width int) string {
 	style := styleDim
 	if focused {
 		style = styleKey
 	}
-	head := rule + rule + " "
-	tail := rule + rule
-	if note != "" {
-		tail = " " + note + " " + rule + rule
-	}
+	head, tail := rule+rule+" ", rule+rule
 	fill := max(0, width-ansi.StringWidth(head)-ansi.StringWidth(title)-1-ansi.StringWidth(tail))
-	line := styleRule.Render(head) + style.Render(title) + " " + styleRule.Render(strings.Repeat(rule, fill))
-	if note != "" {
-		return line + " " + styleDim.Render(note) + " " + styleRule.Render(rule+rule)
-	}
-	return line + styleRule.Render(tail)
-}
-
-// logPosition is the log cursor's line over the line count, "12/80".
-func (m *Model) logPosition() string {
-	if len(m.logLines) == 0 {
-		return ""
-	}
-	return fmt.Sprintf("%d/%d", m.logCursor+1, len(m.logLines))
+	return styleRule.Render(head) + style.Render(title) + " " +
+		styleRule.Render(strings.Repeat(rule, fill)+tail)
 }
 
 // outputFor picks the raw dotnet output to show for a node: the run it came
@@ -665,18 +650,20 @@ func (m *Model) renderHeader() string {
 	if m.cfg.Version != "" {
 		line += "  " + styleDim.Render(m.cfg.Version)
 	}
-	return fit(line, m.width)
+	// The hint rides with the title rather than the footer, since it is
+	// about the program and not about the run, and sits at the far edge so
+	// the name and version stay together on the left.
+	return fitLine(line, styleDim.Render("press "+keyFor(actHelp)+" for help"), m.width)
 }
 
 // renderFooter is the last line of the screen: what dtest is doing or has
-// to say and, the rest of the time, how the last batch of runs went, with
-// the key hint at the right edge.
+// to say and, the rest of the time, how the last batch of runs went.
 func (m *Model) renderFooter() string {
 	left := m.stateLine()
 	if left == "" {
 		left = m.summary()
 	}
-	return fitLine(" "+left, styleDim.Render("press ? for help"), m.width)
+	return fit(" "+left, m.width)
 }
 
 // summary is how the tests of the last batch of runs are going: what has
