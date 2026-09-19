@@ -74,6 +74,10 @@ func markedLines(m *Model) []string {
 	return out
 }
 
+// statRow is a row of the summary block as it appears in the stripped view,
+// so the tests do not hard-code the width of the label column.
+func statRow(label, value string) string { return ansi.Strip(summaryLabel(label)) + value }
+
 func containsAll(t *testing.T, v string, wants ...string) {
 	t.Helper()
 	for _, w := range wants {
@@ -91,7 +95,8 @@ func TestLayoutAndNavigation(t *testing.T) {
 	}
 	v := view(m)
 	containsAll(t, v, "DTEST  Sample  v1.2.3", "⎯⎯ Log  Alpha.Tests ⎯", "⎯⎯ Tests ⎯", "▾ Alpha.Tests (5 tests)", "▸ MathTests (4 tests)", "5 not run (5)", "Not run yet",
-		"Test Projects  (1)", "Tests  5", "Failed  0", "Skipped  0", "Passed  0", "Start at  –", "Duration  –",
+		statRow("Test Projects", "(1)"), statRow("Total tests", "5"), statRow("Tests", "0"), statRow("Failed", "0"),
+		statRow("Skipped", "0"), statRow("Passed", "0"), statRow("Start at", "–"), statRow("Duration", "–"),
 		"press ? to show help, press q to quit")
 	if strings.Contains(v, "Summary") || strings.Contains(v, "│") || strings.Contains(v, "Ready") || strings.Count(v, "DTEST") != 1 {
 		t.Errorf("one bottom pane and no extra text before the first run:\n%s", v)
@@ -115,7 +120,7 @@ func TestLayoutAndNavigation(t *testing.T) {
 	// when a run starts: the Tests line stays on the same screen row.
 	row := func() int {
 		for i, l := range strings.Split(view(m), "\n") {
-			if strings.Contains(l, "Tests  ") && !strings.Contains(l, "⎯") {
+			if strings.Contains(l, statRow("Tests", "")) && !strings.Contains(l, "⎯") {
 				return i
 			}
 		}
@@ -143,11 +148,11 @@ func TestLayoutAndNavigation(t *testing.T) {
 	if g.logH < 24 || g.logH > 27 || g.bottomH+g.logH+headerH+2*titleH != 40 || g.statsW == 0 || g.treeW+g.statsW+2 != 140 || g.treeW*100 < 140*minTreeShare {
 		t.Fatalf("geometry = %+v", g)
 	}
-	// The stats show only while the tree keeps 65% of the width: at 120
-	// columns the tree would have 120-45 = 75 (62%), so they hide.
-	m.Update(tea.WindowSizeMsg{Width: 120, Height: 40})
-	if g := m.layout(); g.statsW != 0 || g.treeW != 120 || strings.Contains(view(m), "press ? to show help") {
-		t.Fatalf("120-column geometry = %+v", g)
+	// The stats show only while the tree keeps 65% of the width: at 110
+	// columns the tree would have 110-39 = 71 (64%), so they hide.
+	m.Update(tea.WindowSizeMsg{Width: 110, Height: 40})
+	if g := m.layout(); g.statsW != 0 || g.treeW != 110 || strings.Contains(view(m), "press ? to show help") {
+		t.Fatalf("110-column geometry = %+v", g)
 	}
 	m.Update(tea.WindowSizeMsg{Width: 140, Height: 40})
 
@@ -209,15 +214,21 @@ func TestLayoutAndNavigation(t *testing.T) {
 }
 
 func TestFitStats(t *testing.T) {
-	block := []string{"state", "", "a", "b", "c", "", "hint"}
-	if got := fitStats(block, 9); len(got) != 9 || got[0] != "" || got[2] != "state" || got[8] != "hint" {
+	head := []string{"state", "projects", "total"}
+	rows := []string{"a", "b", "c", "", "hint"}
+	// The head stays on top and the rows hang from the bottom.
+	if got := fitStats(head, rows, 9); strings.Join(got, "|") != "state|projects|total||a|b|c||hint" {
 		t.Errorf("padded = %q", got)
 	}
-	if got := fitStats(block, 5); strings.Join(got, "|") != "state|a|b|c|hint" {
+	if got := fitStats(head, rows, 7); strings.Join(got, "|") != "state|projects|total|a|b|c|hint" {
 		t.Errorf("compacted = %q", got)
 	}
-	if got := fitStats(block, 3); strings.Join(got, "|") != "state|a|hint" {
+	if got := fitStats(head, rows, 5); strings.Join(got, "|") != "state|projects|total|a|hint" {
 		t.Errorf("cut = %q", got)
+	}
+	// Too short even for the head: what fits is the top of it.
+	if got := fitStats(head, rows, 2); strings.Join(got, "|") != "state|projects" {
+		t.Errorf("squeezed = %q", got)
 	}
 	// On a short terminal the state line still shows.
 	m := newTestModel(t)
@@ -397,7 +408,7 @@ func TestRunFlow(t *testing.T) {
 		t.Fatalf("class should be running: %+v", class.Counts())
 	}
 	v := view(m)
-	containsAll(t, v, "(5 tests | 4 running)", "19:10:48", "Tests  5", "Failed  0", "Passed  0")
+	containsAll(t, v, "(5 tests | 4 running)", "19:10:48", statRow("Total tests", "5"), statRow("Tests", "4"), statRow("Failed", "0"), statRow("Passed", "0"))
 	// Only the project row spins; the running class beneath keeps its arrow.
 	_, bottom, _ := strings.Cut(v, "⎯⎯ Tests")
 	spinners := 0
@@ -412,10 +423,13 @@ func TestRunFlow(t *testing.T) {
 	if spinners != 1 || !strings.Contains(bottom, "▸ MathTests (4 tests | 4 running)") {
 		t.Errorf("spinners = %d; class should show its arrow:\n%s", spinners, bottom)
 	}
-	for _, l := range strings.Split(v, "\n") {
-		summary := strings.Contains(l, "Test Projects  ") || strings.Contains(l, "   Tests  ")
-		if strings.Contains(v, "RUN") || strings.Contains(v, "Running") || (summary && strings.Contains(l, "running")) {
-			t.Errorf("no RUN badge or running text in the summary while tests run: %q", l)
+	if strings.Contains(v, "RUN") || strings.Contains(v, "Running") {
+		t.Errorf("no RUN badge or Running text anywhere while tests run:\n%s", v)
+	}
+	head, rows := m.statsLines()
+	for _, l := range append(head, rows...) {
+		if strings.Contains(ansi.Strip(l), "running") {
+			t.Errorf("the summary should not say running while tests run: %q", ansi.Strip(l))
 		}
 	}
 	f.emit(dotnet.LineEvent{Text: "  Starting: Alpha.Tests"})
@@ -458,12 +472,13 @@ func TestRunFlow(t *testing.T) {
 		"▾ MathTests (5 tests | 1 failed | 1 skipped)",
 		"× Fails 0.001s",
 		"▸ Theory (2 tests | 1 skipped)",
-		"Test Projects  1 failed (1)",
-		"Tests  6",
-		"Failed  1",
-		"Skipped  1",
-		"Passed  3",
-		"Duration  2m34s (tests 0.033s)",
+		statRow("Test Projects", "(1)"), // failures live in the run summary, not here
+		statRow("Total tests", "6"),
+		statRow("Tests", "5"),
+		statRow("Failed", "1"),
+		statRow("Skipped", "1"),
+		statRow("Passed", "3"),
+		statRow("Duration", "2m34s (tests 0.033s)"),
 	)
 	if strings.Contains(v, "Tests failed.") || strings.Contains(v, "Tests passed.") {
 		t.Error("no result line in the stats")
@@ -536,7 +551,7 @@ func TestRunFlow(t *testing.T) {
 		t.Fatalf("Waits=%v Fails=%v", waits.Status(), m.tree.Lookup(class.Project(), "Alpha.Tests.MathTests.Fails").Status())
 	}
 	press(m, "G", "l")
-	containsAll(t, view(m), "○ Waits", "1 queued")
+	containsAll(t, view(m), iconQueued+" Waits", "1 queued")
 	press(m, "g", "g", "j", "j") // back inside MathTests, on Adds
 	press(m, "x")
 	if len(m.queue) != 0 || waits.Status() != tree.StatusNone {
@@ -746,5 +761,210 @@ func TestFormatDuration(t *testing.T) {
 		if got := formatDuration(d); got != want {
 			t.Errorf("formatDuration(%v) = %q, want %q", d, got, want)
 		}
+	}
+}
+
+func TestRenderDuration(t *testing.T) {
+	cases := map[time.Duration]string{
+		3 * time.Millisecond:           "\x1b[32m0.003\x1b[m\x1b[2;32ms\x1b[m",
+		slowDuration:                   "\x1b[32m0.300\x1b[m\x1b[2;32ms\x1b[m",
+		slowDuration + time.Second/100: "\x1b[33m0.310\x1b[m\x1b[2;33ms\x1b[m",
+		1201 * time.Millisecond:        "\x1b[33m1.2\x1b[m\x1b[2;33ms\x1b[m",
+		2*time.Minute + 34*time.Second: "\x1b[33m2m34s\x1b[m",
+	}
+	for d, want := range cases {
+		if got := renderDuration(d); got != want {
+			t.Errorf("renderDuration(%v) = %q, want %q", d, got, want)
+		}
+	}
+}
+
+// The rule around a pane title is fainter than the title, and the line
+// still fills the width exactly.
+func TestPaneTitleRule(t *testing.T) {
+	m := newTestModel(t)
+	var titles []string
+	for _, l := range strings.Split(m.View().Content, "\n") {
+		if strings.Contains(ansi.Strip(l), rule) {
+			titles = append(titles, l)
+		}
+	}
+	if len(titles) != 2 {
+		t.Fatalf("two pane titles, got %d", len(titles))
+	}
+	for _, l := range titles {
+		if w := ansi.StringWidth(l); w != m.width {
+			t.Errorf("title is %d cells wide, want %d: %q", w, m.width, ansi.Strip(l))
+		}
+		if !strings.Contains(l, styleRule.Render(rule+rule)) {
+			t.Errorf("the rule should be faint: %q", l)
+		}
+	}
+	if strings.Contains(titles[1], styleRule.Render("Tests")) {
+		t.Error("the focused title itself should not be faint")
+	}
+}
+
+// finishRun feeds a run to completion with the given results.
+func finishRun(t *testing.T, m *Model, f *fakeRun, results ...dotnet.Result) {
+	t.Helper()
+	<-f.started
+	f.emit(dotnet.DoneEvent{Results: results})
+	m.Update(<-m.runEvents())
+}
+
+// The summary beside the tree describes the last batch of runs, not the
+// whole solution: running one class after everything reports that class.
+func TestSummaryCountsLastRun(t *testing.T) {
+	f := stubRun(t)
+	m := newTestModel(t)
+	pass := func(name string) dotnet.Result {
+		return dotnet.Result{Name: name, Outcome: dotnet.OutcomePassed, Duration: time.Millisecond}
+	}
+	fail := func(name string) dotnet.Result {
+		return dotnet.Result{Name: name, Outcome: dotnet.OutcomeFailed, Message: "boom"}
+	}
+	// Everything: one of the five fails.
+	press(m, "A")
+	finishRun(t, m, f,
+		pass("Alpha.Tests.MathTests.Adds"), fail("Alpha.Tests.MathTests.Fails"),
+		pass("Alpha.Tests.MathTests.Theory(n: 1)"), pass("Alpha.Tests.MathTests.Theory(n: 2)"),
+		pass("Alpha.Tests.SlowTests.Waits"))
+	containsAll(t, view(m), statRow("Total tests", "5"), statRow("Tests", "5"), statRow("Failed", "1"), statRow("Passed", "4"))
+
+	// Then just SlowTests, which passes. The failure elsewhere is still in
+	// the tree, but this run had none of it.
+	press(m, "G", "r")
+	finishRun(t, m, f, pass("Alpha.Tests.SlowTests.Waits"))
+	v := view(m)
+	containsAll(t, v, statRow("Total tests", "5"), statRow("Tests", "1"), statRow("Failed", "0"), statRow("Passed", "1"))
+	if !strings.Contains(v, "× Fails") {
+		t.Error("the earlier failure should still be in the tree")
+	}
+	if c := m.batchCounts(); c.Total != 1 || c.Passed != 1 {
+		t.Errorf("batch = %+v", c)
+	}
+}
+
+// The state line and the totals stay at the top of the pane; the run
+// summary stays at the bottom of it.
+func TestStatsHeadPinnedToTop(t *testing.T) {
+	m := newTestModel(t)
+	m.building = true
+	m.refresh()
+	lines := strings.Split(view(m), "\n")
+	var title, state, projects, total, hint int
+	for i, l := range lines {
+		switch {
+		case strings.Contains(l, "⎯⎯ Tests"):
+			title = i
+		case strings.Contains(l, "Building Sample.slnx…"):
+			state = i
+		case strings.Contains(l, statRow("Test Projects", "")):
+			projects = i
+		case strings.Contains(l, statRow("Total tests", "")):
+			total = i
+		case strings.Contains(l, "press q to quit"):
+			hint = i
+		}
+	}
+	if state != title+1 || projects != state+1 || total != projects+1 {
+		t.Errorf("head should be state, projects, total from the top of the pane: %d %d %d %d", title, state, projects, total)
+	}
+	if hint != len(lines)-1 {
+		t.Errorf("the hint should be the last line, got %d of %d", hint, len(lines))
+	}
+}
+
+// The tree draws branch lines down its left: a tee for a child with more
+// siblings below, a corner for the last one, and a bar carried down through
+// every level that has not ended yet.
+func TestTreeGuides(t *testing.T) {
+	m := newTestModel(t)
+	press(m, "j", "l", "j", "j", "j", "space") // expand MathTests, then Theory
+	want := []string{
+		"▾ Alpha.Tests (5 tests)",
+		"├─ ▾ MathTests (4 tests)",
+		"│  ├─ · Adds",
+		"│  ├─ · Fails",
+		"│  └─ ▾ Theory (2 tests)",
+		"│     ├─ · (n: 1)",
+		"│     └─ · (n: 2)",
+		"└─ ▸ SlowTests (1 test)",
+	}
+	got := treeRows(m)
+	if len(got) != len(want) {
+		t.Fatalf("got %d rows:\n%s", len(got), strings.Join(got, "\n"))
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("row %d = %q, want %q", i, got[i], want[i])
+		}
+	}
+	// Filtering hides rows, and the guides join up the ones that are left.
+	press(m, "/", "W", "a", "i", "enter")
+	wantFiltered := []string{"▾ Alpha.Tests (5 tests)", "└─ ▾ SlowTests (1 test)", "   └─ · Waits"}
+	if got := treeRows(m); strings.Join(got, "|") != strings.Join(wantFiltered, "|") {
+		t.Errorf("filtered guides = %q", got)
+	}
+}
+
+// treeRows are the tree pane's rows as plain text, without the summary
+// block beside them or the indent every row carries.
+func treeRows(m *Model) []string {
+	lines := strings.Split(view(m), "\n")
+	start := 0
+	for i, l := range lines {
+		if strings.HasPrefix(l, rule+rule+" Tests") {
+			start = i + 1
+		}
+	}
+	var out []string
+	for _, l := range lines[start:] {
+		if l = strings.TrimRight(ansi.Truncate(l, m.treeView.Width(), ""), " "); l != "" {
+			out = append(out, strings.TrimPrefix(l, "  "))
+		}
+	}
+	return out
+}
+
+// Everything waiting for its run is greyed out, name included, so a queued
+// test reads as waiting rather than as a result. A project keeps its weight
+// so the tree still has headings.
+func TestQueuedIsGrey(t *testing.T) {
+	f := stubRun(t)
+	m := newTestModel(t)
+	p := m.tree.AddProject("/src/Beta.Tests/Beta.Tests.csproj")
+	m.tree.SetTests(p, []string{"Beta.Tests.ApiTests.Pings"})
+	press(m, "A") // the first project runs, the second one queues
+	<-f.started
+	press(m, "G", "l", "l")
+	if p.Status() != tree.StatusQueued {
+		t.Fatalf("the second project should be queued, got %v", p.Status())
+	}
+	want := map[string]string{
+		"Beta.Tests": styleQueued.Bold(true).Render("Beta.Tests"),
+		"ApiTests":   styleQueued.Render("ApiTests"),
+		"Pings":      styleQueued.Render("Pings"),
+	}
+	guides := treeGuides(m.rows)
+	seen := map[string]bool{}
+	for i, n := range m.rows {
+		rendered, ok := want[n.Name]
+		if !ok {
+			continue
+		}
+		seen[n.Name] = true
+		if l := m.renderNode(n, guides[i]); !strings.Contains(l, rendered) {
+			t.Errorf("%s should be grey: %q", n.Name, l)
+		}
+	}
+	for name := range want {
+		if !seen[name] {
+			t.Errorf("no tree row for %s", name)
+		}
+	}
+	if strings.Contains(styleQueued.Render("x"), "36") {
+		t.Error("queued should be grey, not cyan")
 	}
 }

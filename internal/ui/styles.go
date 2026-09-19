@@ -18,8 +18,11 @@ var (
 	styleFailed   = lipgloss.NewStyle().Foreground(colRed)
 	styleSkipped  = lipgloss.NewStyle().Foreground(colYellow)
 	styleRunning  = lipgloss.NewStyle().Foreground(colCyan)
-	styleQueued   = lipgloss.NewStyle().Foreground(colCyan).Faint(true)
+	styleQueued   = lipgloss.NewStyle().Foreground(colGrey)
 	styleDim      = lipgloss.NewStyle().Foreground(colGrey)
+	styleRule     = lipgloss.NewStyle().Foreground(colGrey).Faint(true)
+	styleQuick    = lipgloss.NewStyle().Foreground(colGreen)
+	styleSlow     = lipgloss.NewStyle().Foreground(colYellow)
 	styleBold     = lipgloss.NewStyle().Bold(true)
 	styleKey      = lipgloss.NewStyle().Foreground(colCyan).Bold(true)
 	styleCommand  = lipgloss.NewStyle().Foreground(colCyan)
@@ -47,9 +50,18 @@ const (
 	iconFailed  = "×"
 	iconSkipped = "↓"
 	iconNone    = "·"
-	iconQueued  = "○" // scheduled in a run that has not started
+	iconQueued  = "⧗" // an hourglass: scheduled in a run that has not started
 	iconArrow   = "❯" // marks a source location line in the log
 	iconOpen    = "▾" // an expanded project, class or theory
 	iconClosed  = "▸" // a collapsed one
 	rule        = "⎯"
+)
+
+// Tree guides, drawn down the left of the tree so the nesting reads at a
+// glance. Each level below the project costs one three-column step.
+const (
+	guideBranch = "├─ " // a child with more siblings under the same parent
+	guideLast   = "└─ " // the last child at its level
+	guideBar    = "│  " // a level that carries on past this row
+	guideGap    = "   " // one that has ended
 )

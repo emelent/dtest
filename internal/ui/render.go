@@ -24,11 +24,11 @@ type geometry struct {
 	logH    int // log pane body height (top, full width)
 	bottomH int // bottom pane body height
 	treeW   int // width left for the tree beside the summary
-	statsW  int // width of the right-aligned summary; 0 when it does not fit
+	statsW  int // width of the summary beside the tree; 0 when it does not fit
 }
 
 // layout splits the window: the log takes about 70% of the height; the
-// bottom pane holds the tree with the summary right-aligned beside it.
+// bottom pane holds the tree with the summary along its right-hand side.
 func (m *Model) layout() geometry {
 	body := max(4, m.height-headerH-2*titleH)
 	g := geometry{}
@@ -38,8 +38,8 @@ func (m *Model) layout() geometry {
 	// truncated to that, so a long label cannot shift the block. Unless the
 	// tree keeps at least minTreeShare of the width the block is hidden and
 	// the tree gets it all.
-	stats := m.statsLines()
-	for _, l := range stats[1:] {
+	head, rows := m.statsLines()
+	for _, l := range append(rows, head[1:]...) {
 		g.statsW = max(g.statsW, ansi.StringWidth(l))
 	}
 	g.treeW = m.width - g.statsW - 2
@@ -72,19 +72,25 @@ func (m *Model) View() tea.View {
 	return v
 }
 
-// paneTitle is a ⎯⎯ Title ⎯⎯⎯ line, bright when the pane is focused, with
-// an optional note such as the cursor position near the right end.
+// paneTitle is a ⎯⎯ Title ⎯⎯⎯ line with an optional note such as the cursor
+// position near the right end. The rule itself is faint so it only frames
+// the pane; the title carries the colour, bright when the pane is focused.
 func (m *Model) paneTitle(title string, focused bool, width int, note string) string {
 	style := styleDim
 	if focused {
 		style = styleKey
 	}
-	text := rule + rule + " " + title + " "
+	head := rule + rule + " "
 	tail := rule + rule
 	if note != "" {
 		tail = " " + note + " " + rule + rule
 	}
-	return style.Render(text + strings.Repeat(rule, max(0, width-ansi.StringWidth(text)-ansi.StringWidth(tail))) + tail)
+	fill := max(0, width-ansi.StringWidth(head)-ansi.StringWidth(title)-1-ansi.StringWidth(tail))
+	line := styleRule.Render(head) + style.Render(title) + " " + styleRule.Render(strings.Repeat(rule, fill))
+	if note != "" {
+		return line + " " + styleDim.Render(note) + " " + styleRule.Render(rule+rule)
+	}
+	return line + styleRule.Render(tail)
 }
 
 // logPosition is the log cursor's line over the line count, "12/80".
@@ -149,8 +155,9 @@ func (m *Model) refreshTree() {
 	}
 	m.cursor = clamp(m.cursor, len(m.rows))
 	lines := make([]string, 0, len(m.rows))
+	guides := treeGuides(m.rows)
 	for i, n := range m.rows {
-		line := ansi.Truncate(m.renderNode(n), m.treeView.Width(), "…")
+		line := ansi.Truncate(m.renderNode(n, guides[i]), m.treeView.Width(), "…")
 		if i == m.cursor {
 			line = highlight(line, m.treeView.Width(), m.focus == paneTree)
 		}
@@ -271,7 +278,7 @@ func (m *Model) renderNodeLog(n *tree.Node) []string {
 	c := n.Counts()
 	head := "  " + m.statusIcon(n.Status()) + " " + styleBold.Render(breadcrumb(n))
 	if d := n.Duration(); d > 0 {
-		head += " " + styleDim.Render(formatDuration(d))
+		head += " " + renderDuration(d)
 	}
 	// Then the section's tally, as the summary prints it.
 	lines = append(lines, head, "    "+strings.Join(summaryParts(c, true), styleDim.Render(" | ")))
@@ -309,7 +316,7 @@ func (m *Model) renderLeafLog(n *tree.Node) []string {
 	case n.Status() == tree.StatusFailed:
 		return append([]string{head, ""}, m.renderFailure(n, true)...)
 	}
-	lines := []string{head + " " + styleDim.Render(formatDuration(r.Duration)), ""}
+	lines := []string{head + " " + renderDuration(r.Duration), ""}
 	switch n.Status() {
 	case tree.StatusSkipped:
 		lines = append(lines, "  "+styleSkipped.Render(iconSkipped+" Skipped"))
@@ -327,7 +334,7 @@ func (m *Model) renderLeafLog(n *tree.Node) []string {
 // stack trace and captured output.
 func (m *Model) renderFailure(l *tree.Node, full bool) []string {
 	r := l.Result
-	lines := []string{"  " + badgeFail.Render("FAIL") + " " + styleBold.Render(breadcrumb(l)) + " " + styleDim.Render(formatDuration(r.Duration))}
+	lines := []string{"  " + badgeFail.Render("FAIL") + " " + styleBold.Render(breadcrumb(l)) + " " + renderDuration(r.Duration)}
 	for _, ml := range strings.Split(strings.TrimRight(r.Message, "\n"), "\n") {
 		lines = append(lines, colorMessage(ml))
 	}
@@ -380,23 +387,75 @@ func highlight(line string, width int, focused bool) string {
 	return bg + s + "\x1b[0m"
 }
 
-// renderBottom draws the tree with the summary right-aligned beside it: the
-// summary block keeps its label column and sits flush with the right edge.
+// renderBottom draws the tree with the summary beside it: the block sits
+// flush with the right edge of the pane, and its own lines are left-aligned
+// within it, labels down one edge and values in a column.
 func (m *Model) renderBottom(g geometry) string {
 	tree := m.treeView.View()
 	if g.statsW == 0 {
 		return tree
 	}
-	stats := fitStats(m.statsLines(), g.bottomH)
+	head, rows := m.statsLines()
+	stats := fitStats(head, rows, g.bottomH)
 	for i, l := range stats {
 		stats[i] = fit(ansi.Truncate(l, g.statsW, "…"), g.statsW)
 	}
 	return lipgloss.JoinHorizontal(lipgloss.Top, tree, "  ", strings.Join(stats, "\n"))
 }
 
-// renderNode draws one tree line: glyph, name and, for groups, the counts
-// in parentheses, then the duration.
-func (m *Model) renderNode(n *tree.Node) string {
+// treeGuides draws the branch lines down the left of the tree, one per row:
+// a corner or a tee at the row's own level, and above it a bar for every
+// level that carries on further down. Projects are roots, so they get none.
+// It works off the visible rows, so a filtered tree still joins up.
+func treeGuides(rows []*tree.Node) []string {
+	depth := make([]int, len(rows))
+	deepest := 0
+	for i, n := range rows {
+		depth[i] = n.Depth()
+		deepest = max(deepest, depth[i])
+	}
+	// Backwards: a row is the last of its siblings unless a row at the same
+	// depth was already seen without dropping shallower in between.
+	last := make([]bool, len(rows))
+	more := make([]bool, deepest+2)
+	for i := len(rows) - 1; i >= 0; i-- {
+		d := depth[i]
+		last[i] = !more[d]
+		more[d] = true
+		for k := d + 1; k < len(more); k++ {
+			more[k] = false
+		}
+	}
+	// Forwards: every ancestor has been seen by the time its children are,
+	// so carries[k] is whether this row's ancestor at depth k has siblings
+	// still to come.
+	out := make([]string, len(rows))
+	carries := make([]bool, deepest+2)
+	for i, d := range depth {
+		carries[d] = !last[i]
+		var b strings.Builder
+		for k := 1; k < d; k++ {
+			if carries[k] {
+				b.WriteString(guideBar)
+			} else {
+				b.WriteString(guideGap)
+			}
+		}
+		if d > 0 {
+			if last[i] {
+				b.WriteString(guideLast)
+			} else {
+				b.WriteString(guideBranch)
+			}
+		}
+		out[i] = styleDim.Render(b.String())
+	}
+	return out
+}
+
+// renderNode draws one tree line: the branch guide, then the glyph, name
+// and, for groups, the counts in parentheses, then the duration.
+func (m *Model) renderNode(n *tree.Node, guide string) string {
 	status := n.Status()
 	name := n.Name
 	var tail []string
@@ -408,13 +467,17 @@ func (m *Model) renderNode(n *tree.Node) string {
 		name = styleFailed.Render(name)
 	case status == tree.StatusSkipped && n.IsLeaf():
 		name = styleDim.Render(name) + " " + styleSkipped.Render("[skipped]")
+	case status == tree.StatusQueued:
+		// Everything waiting for its run is greyed out, name included; a
+		// project keeps its weight so the tree still has headings.
+		name = styleQueued.Bold(n.Kind == tree.KindProject).Render(name)
 	case n.Kind == tree.KindProject:
 		name = styleBold.Render(name)
 	}
 	if d := n.Duration(); d > 0 || (n.IsLeaf() && n.Result != nil && status != tree.StatusSkipped) {
-		tail = append(tail, styleDim.Render(formatDuration(d)))
+		tail = append(tail, renderDuration(d))
 	}
-	line := "  " + strings.Repeat("  ", n.Depth()) + m.treeIcon(n) + " " + name
+	line := "  " + guide + m.treeIcon(n) + " " + name
 	if len(tail) > 0 {
 		line += " " + strings.Join(tail, " ")
 	}
@@ -528,11 +591,22 @@ func (m *Model) renderHeader() string {
 	return fit(line, m.width)
 }
 
-// fitStats makes the stats block exactly height rows: bottom-aligned when
-// there is room; when there is not, the blank spacers go first, then rows
-// from the bottom, so the state line (where errors show) and the hint
-// survive on a short terminal.
-func fitStats(stats []string, height int) []string {
+// fitStats makes the stats block exactly height rows: the head (what dtest
+// is doing, and what the solution holds) stays at the top of the pane, and
+// the run summary hangs from the bottom of whatever is left. When the rows
+// do not fit, the blank spacers go first, then rows from the bottom, so the
+// hint survives on a short terminal.
+func fitStats(head, rows []string, height int) []string {
+	if height <= len(head) {
+		return head[:max(0, height)]
+	}
+	out := make([]string, 0, height)
+	return append(append(out, head...), fitBottom(rows, height-len(head))...)
+}
+
+// fitBottom pads or trims stats to exactly height rows, keeping the last
+// one (the hint) and dropping blank spacers before real rows.
+func fitBottom(stats []string, height int) []string {
 	if len(stats) > height {
 		var compact []string
 		for _, l := range stats {
@@ -552,16 +626,19 @@ func fitStats(stats []string, height int) []string {
 	return stats
 }
 
-// statsLines is the block beside the tree: the state line, then the
-// counts stacked one per row, the start time and duration, and the key
+// statsLines is the block beside the tree, in two parts. The head stays at
+// the top of the pane: what dtest is doing, then what the solution holds,
+// its test projects and its total number of tests. The rest hangs from the
+// bottom and describes the last batch of runs: how many tests it covered,
+// how they turned out, when it started and how long it took, then the key
 // hint. Every row is always present so the block never changes shape.
-func (m *Model) statsLines() []string {
+func (m *Model) statsLines() (head, rows []string) {
+	// Failures are left out of the project tally: this row says what the
+	// solution holds, and the run summary below is where failures belong.
 	var pc tree.Counts
 	for _, p := range m.tree.Projects {
 		pc.Total++
 		switch p.Status() {
-		case tree.StatusFailed:
-			pc.Failed++
 		case tree.StatusPassed:
 			pc.Passed++
 		case tree.StatusSkipped:
@@ -588,27 +665,32 @@ func (m *Model) statsLines() []string {
 		}
 		return style.Bold(true).Render(fmt.Sprint(n))
 	}
-	return []string{
+	ran := m.batchCounts()
+	head = []string{
 		m.stateLine(),
-		"",
 		summaryLabel("Test Projects") + strings.Join(summaryParts(pc, false), styleDim.Render(" | ")),
-		summaryLabel("Tests") + fmt.Sprint(c.Total),
-		summaryLabel("Failed") + count(c.Failed, styleFailed),
-		summaryLabel("Skipped") + count(c.Skipped, styleSkipped),
-		summaryLabel("Passed") + count(c.Passed, stylePassed),
+		summaryLabel("Total tests") + fmt.Sprint(c.Total),
+	}
+	rows = []string{
+		summaryLabel("Tests") + count(ran.Total, lipgloss.NewStyle()),
+		summaryLabel("Failed") + count(ran.Failed, styleFailed),
+		summaryLabel("Skipped") + count(ran.Skipped, styleSkipped),
+		summaryLabel("Passed") + count(ran.Passed, stylePassed),
 		summaryLabel("Start at") + start,
 		summaryLabel("Duration") + dur,
 		"",
-		strings.Repeat(" ", 7) + styleDim.Render("press ? to show help, press q to quit"),
+		styleDim.Render("press ? to show help, press q to quit"),
 	}
+	return head, rows
 }
 
 // summaryLabelW is the width of the summary's label column: the longest
-// label, right-aligned, plus two spaces.
+// label, left-aligned, plus two spaces. Left-aligning gives the block a
+// straight edge down the side it starts on, with the values in a column.
 const summaryLabelW = 16
 
 func summaryLabel(s string) string {
-	return styleDim.Render(fmt.Sprintf("%*s", summaryLabelW-2, s)) + "  "
+	return styleDim.Render(fmt.Sprintf("%-*s", summaryLabelW-2, s)) + "  "
 }
 
 // summaryParts is vitest's "1 failed | 1 passed | 2 skipped (4)" as its
@@ -648,11 +730,11 @@ func (m *Model) stateLine() string {
 		if m.statusErr {
 			badge = badgeFail.Render("FAIL")
 		}
-		return " " + badge + " " + m.status
+		return badge + " " + m.status
 	case m.building:
-		return "       Building " + filepath.Base(m.cfg.Target) + "…"
+		return "Building " + filepath.Base(m.cfg.Target) + "…"
 	case m.loading > 0:
-		return "       Listing tests…"
+		return "Listing tests…"
 	}
 	return ""
 }
@@ -776,6 +858,30 @@ func colorMessage(line string) string {
 }
 
 // Text helpers.
+
+// slowDuration is vitest's slowTestThreshold: anything that took longer is
+// worth a second look, so its time is drawn in the warning colour.
+const slowDuration = 300 * time.Millisecond
+
+// renderDuration colours a time as vitest does: green while it is quick,
+// yellow once it passes the slow threshold, with the unit a faded shade of
+// that same colour so the number reads first.
+func renderDuration(d time.Duration) string {
+	style := styleQuick
+	if d > slowDuration {
+		style = styleSlow
+	}
+	s := formatDuration(d)
+	// The plain forms (0.032s, 1.5s, 35s) end in their unit, which is faded;
+	// the compound ones (2m34s, 1h02m) carry a unit inside the number, so
+	// they are left in one shade.
+	if i := strings.IndexFunc(s, isLetter); i > 0 && strings.IndexFunc(s[i:], func(r rune) bool { return !isLetter(r) }) < 0 {
+		return style.Render(s[:i]) + style.Faint(true).Render(s[i:])
+	}
+	return style.Render(s)
+}
+
+func isLetter(r rune) bool { return r >= 'a' && r <= 'z' }
 
 // formatDuration renders a test time compactly: 0.032s below a second, 1.5s
 // below ten, 35s below a minute, then 2m34s and 1h02m.

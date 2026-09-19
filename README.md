@@ -19,14 +19,18 @@ Actual:   428
 
 
 
-⎯⎯ Tests ⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
-  ▾ Shop.Api.Tests (16 tests | 1 failed | 1 skipped) 1.1s           Test Projects  1 failed | 1 passed (2)
-    ▸ Controllers.OrdersControllerTests (3 tests) 0.305s                    Tests  1 failed | 46 passed | 2 skipped (49)
-    ▸ Integration.CheckoutFlowTests (2 tests | 1 skipped) 0.803s         Start at  21:36:37
-    ▾ Middleware.RateLimitMiddlewareTests (2 tests | 1 failed) 0.002s    Duration  4.0s (tests 2.3s)
-      × OverLimit_Returns429 0.001s
-      ✓ UnderLimit_Passes 0.001s                                        FAIL  Tests failed.
-  ▾ Shop.Core.Tests (33 tests | 1 skipped) 1.2s                              press ? to show help, press q to quit
+⎯⎯ Tests ⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
+  ▾ Shop.Api.Tests (16 tests | 1 failed | 1 skipped) 1.1s
+  ├─ ▸ Controllers.OrdersControllerTests (3 tests) 0.305s               Test Projects   1 passed (2)
+  ├─ ▸ Controllers.ProductsControllerTests (4 tests) 0.102s             Total tests     49
+  ├─ ▸ Integration.CheckoutFlowTests (2 tests | 1 skipped) 0.803s       Tests           49
+  ├─ ▾ Middleware.RateLimitMiddlewareTests (2 tests | 1 failed) 0.002s  Failed          1
+  │  ├─ × OverLimit_Returns429 0.001s                                   Skipped         2
+  │  └─ ✓ UnderLimit_Passes 0.001s                                      Passed          46
+  └─ ▸ Middleware.AuthMiddlewareTests (5 tests) 0.004s                  Start at        21:36:37
+  ▾ Shop.Core.Tests (33 tests | 1 skipped) 1.2s                         Duration        4.0s (tests 2.3s)
+  ├─ ▸ Inventory.StockTests (8 tests) 0.201s
+  └─ ▸ Pricing.MoneyTests (12 tests) 0.400s                             press ? to show help, press q to quit
 ```
 
 ## Layout
@@ -46,17 +50,24 @@ ctrl+j/k for their own pane movement.
   it. `v` swaps in the raw `dotnet` output of the selected project,
   coloured by kind.
 - **Tests** (bottom) is the tree of projects, classes, methods and theory
-  rows, with vitest-style counts and durations on every group, and the
-  stats right-aligned beside it: project results, then the test total and
-  the failed, skipped and passed counts stacked, the start time and duration
-  of the last batch of runs, and the key hint. The stats hide unless the
-  tree keeps at least 65% of the width. After a run, passing classes fold
-  to one line and failing ones open.
+  rows, drawn with branch lines (`├─`, `└─`, `│`) so the nesting reads at a
+  glance, with vitest-style counts and durations on every group, and the
+  stats along its right-hand side, labels down one edge and values in a
+  column. The stats come in two halves. At the top of the pane sits what
+  dtest is doing (building, listing, or a status message) and what the
+  solution holds: its test projects and its total number of tests. Failures
+  are left out up there, since the run summary below is where they go.
+  Hanging from the bottom is the last batch of runs: how many tests it
+  covered, how many of those failed, were skipped and passed, when it
+  started and how long it took, then the key hint. So running one class
+  reports that class, and the totals above stay put. The stats hide unless
+  the tree keeps at least 65% of the width. After a run, passing classes
+  fold to one line and failing ones open.
 
 ## Features
 
 - Run the selected project, class, method or test; `A` runs everything, `F` re-runs only what failed; runs queue up, one `dotnet test` per project
-- Live status while tests run: the project row spins and everything running beneath it turns cyan, tests waiting in a queued run show ○; ✓ × ↓ arrive as each result comes in; projects, classes and theories carry a fold arrow (▾ / ▸) in the colour of their status, with counts and durations rolled up
+- Live status while tests run: the project row spins and everything running beneath it turns cyan, tests waiting in a queued run are greyed out behind an hourglass, ⧗; ✓ × ↓ arrive as each result comes in; projects, classes and theories carry a fold arrow (▾ / ▸) in the colour of their status, with counts and durations rolled up
 - Open the selected test in Neovim, either a running instance (via the socket in `$nvim_sock`) or one launched in place; a failed test opens at the failing line
 - Filter the tree by test or project name as you type, or narrow it to the failed (`f`) or skipped (`s`) tests
 
@@ -128,8 +139,10 @@ the console logger as they happen and from a TRX file when the run ends, so
 a test that was not listed (added since the last reload) still appears.
 
 Durations are `0.032s` below a second, `1.5s` below ten, `35s` below a
-minute, then `2m34s`. A group shows the sum of its tests' times; the
-summary's Duration is the wall-clock time of the whole batch of runs.
+minute, then `2m34s`. They are coloured as vitest colours them: green up to
+300ms, yellow beyond it, so slow tests stand out, with the unit in a faded
+shade of the number's own colour. A group shows the sum of its tests' times;
+the summary's Duration is the wall-clock time of the whole batch of runs.
 
 ## Neovim
 

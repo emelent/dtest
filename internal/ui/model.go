@@ -1,6 +1,6 @@
 // Package ui is the bubbletea front end, laid out in two panes in the
 // style of vitest: the log of the selected tests on top, and below it the
-// test tree with the run statistics right-aligned beside it.
+// test tree with the run statistics along its right-hand side.
 package ui
 
 import (
@@ -101,9 +101,10 @@ type Model struct {
 	building bool
 	events   chan tea.Msg // build events
 
-	batchStart time.Time // when the current sequence of runs began
-	batchEnd   time.Time // when it finished; zero while running
-	runsDone   bool      // at least one run has finished
+	batchStart time.Time           // when the current sequence of runs began
+	batchEnd   time.Time           // when it finished; zero while running
+	batch      map[*tree.Node]bool // the leaves of that sequence, for the summary
+	runsDone   bool                // at least one run has finished
 
 	status    string
 	statusErr bool
@@ -338,6 +339,11 @@ func (m *Model) setStatus(text string, isErr bool) tea.Cmd {
 // enqueue queues a run for each project that nodes belong to and starts the
 // first when nothing else is running.
 func (m *Model) enqueue(nodes []*tree.Node) tea.Cmd {
+	// Nothing running means this starts a new batch, so the summary beside
+	// the tree describes these runs and not the last ones.
+	if m.run == nil {
+		m.batchStart, m.batchEnd, m.batch = now(), time.Time{}, nil
+	}
 	byProject := map[*tree.Node][]*tree.Node{}
 	var order []*tree.Node
 	for _, n := range nodes {
@@ -369,12 +375,48 @@ func (m *Model) enqueue(nodes []*tree.Node) tea.Cmd {
 				l.SetStatus(tree.StatusQueued)
 			}
 		}
+		m.addToBatch(req.leaves...)
 		m.queue = append(m.queue, req)
 	}
-	if m.run == nil {
-		m.batchStart, m.batchEnd = now(), time.Time{}
-	}
 	return m.pump()
+}
+
+// addToBatch records leaves as part of the batch in progress. A project and
+// one of its classes can both be queued in the same batch, and a test that
+// was never listed shows up only when its result arrives, so the batch is a
+// set that either can add to.
+func (m *Model) addToBatch(leaves ...*tree.Node) {
+	if m.batch == nil {
+		m.batch = map[*tree.Node]bool{}
+	}
+	for _, l := range leaves {
+		m.batch[l] = true
+	}
+}
+
+// batchCounts tallies the batch by the state its tests are in now. A test
+// whose run was cancelled or dropped has no state and falls out, so the
+// rows always add up to the total above them.
+func (m *Model) batchCounts() tree.Counts {
+	var c tree.Counts
+	for l := range m.batch {
+		switch l.Status() {
+		case tree.StatusRunning:
+			c.Running++
+		case tree.StatusQueued:
+			c.Queued++
+		case tree.StatusPassed:
+			c.Passed++
+		case tree.StatusFailed:
+			c.Failed++
+		case tree.StatusSkipped:
+			c.Skipped++
+		default:
+			continue
+		}
+		c.Total++
+	}
+	return c
 }
 
 // dropQueue forgets the queued runs and clears their tests' queued marks.
@@ -458,6 +500,7 @@ func (m *Model) handleRunEvent(msg runEventMsg) tea.Cmd {
 // was not listed.
 func (m *Model) apply(project *tree.Node, r dotnet.Result) {
 	leaf := m.tree.Leaf(project, r.Name)
+	m.addToBatch(leaf) // it may not have been listed, so not queued either
 	res := r
 	leaf.Result = &res
 	switch r.Outcome {
