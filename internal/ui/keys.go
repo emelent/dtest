@@ -94,6 +94,16 @@ func (m *Model) handleTreeKey(key string) (bool, tea.Cmd) {
 		} else if len(n.Children) > 0 {
 			m.move(1)
 		}
+	case "L":
+		// Shifted, the fold keys act on the whole tree. A filtered tree
+		// shows every match already, so folding is off there.
+		if !m.filtered() {
+			m.tree.SetExpanded(true)
+		}
+	case "H":
+		if !m.filtered() {
+			m.tree.SetExpanded(false)
+		}
 	case "space":
 		if n != nil && !n.IsLeaf() && !m.filtered() {
 			n.Expanded = !n.Expanded

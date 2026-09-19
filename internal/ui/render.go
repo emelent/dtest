@@ -101,13 +101,31 @@ func (m *Model) logPosition() string {
 	return fmt.Sprintf("%d/%d", m.logCursor+1, len(m.logLines))
 }
 
+// outputFor picks the raw dotnet output to show for a node: its own
+// project's, or, for the root, whichever project ran most recently, falling
+// back to the build log.
+func (m *Model) outputFor(n *tree.Node) (key, name string) {
+	var p *tree.Node
+	if n != nil {
+		p = n.Project()
+	}
+	if p == nil && n != nil {
+		for _, c := range m.tree.Projects {
+			if c.Path == m.lastLog {
+				p = c
+			}
+		}
+	}
+	if p != nil && m.logs[p.Path] != nil {
+		return p.Path, p.Name
+	}
+	return buildLogKey, "build"
+}
+
 func (m *Model) logTitle() string {
 	n := m.current()
 	if m.showOutput {
-		name := "build"
-		if n != nil && m.logs[n.Project().Path] != nil {
-			name = n.Project().Name
-		}
+		_, name := m.outputFor(n)
 		return "Output  " + name
 	}
 	if n == nil {
@@ -209,10 +227,7 @@ func (m *Model) refreshLog() {
 	n := m.current()
 	var lines []string
 	if m.showOutput {
-		key := buildLogKey
-		if n != nil && m.logs[n.Project().Path] != nil {
-			key = n.Project().Path
-		}
+		key, _ := m.outputFor(n)
 		out := m.logs[key]
 		if len(out) == 0 {
 			lines = append(lines, styleDim.Render("  (no output yet)"))
@@ -454,12 +469,18 @@ func treeGuides(rows []*tree.Node) []string {
 }
 
 // renderNode draws one tree line: the branch guide, then the glyph, name
-// and, for groups, the counts in parentheses, then the duration.
+// and, for groups, the counts in parentheses, then the duration. The root
+// is the exception: it names how many tests the solution has and stops
+// there, since how the last run went is what the summary beside the tree is
+// for.
 func (m *Model) renderNode(n *tree.Node, guide string) string {
 	status := n.Status()
 	name := n.Name
 	var tail []string
-	if !n.IsLeaf() {
+	switch {
+	case n.Kind == tree.KindRoot:
+		tail = append(tail, styleDim.Render("("+testCount(n.Counts().Total)+")"))
+	case !n.IsLeaf():
 		tail = append(tail, m.renderCounts(n.Counts()))
 	}
 	switch {
@@ -468,13 +489,14 @@ func (m *Model) renderNode(n *tree.Node, guide string) string {
 	case status == tree.StatusSkipped && n.IsLeaf():
 		name = styleDim.Render(name) + " " + styleSkipped.Render("[skipped]")
 	case status == tree.StatusQueued:
-		// Everything waiting for its run is greyed out, name included; a
-		// project keeps its weight so the tree still has headings.
-		name = styleQueued.Bold(n.Kind == tree.KindProject).Render(name)
-	case n.Kind == tree.KindProject:
+		// Everything waiting for its run is greyed out, name included; the
+		// root and the projects keep their weight so the tree still has
+		// headings.
+		name = styleQueued.Bold(isHeading(n)).Render(name)
+	case isHeading(n):
 		name = styleBold.Render(name)
 	}
-	if d := n.Duration(); d > 0 || (n.IsLeaf() && n.Result != nil && status != tree.StatusSkipped) {
+	if d := n.Duration(); n.Kind != tree.KindRoot && (d > 0 || (n.IsLeaf() && n.Result != nil && status != tree.StatusSkipped)) {
 		tail = append(tail, renderDuration(d))
 	}
 	line := "  " + guide + m.treeIcon(n) + " " + name
@@ -484,12 +506,23 @@ func (m *Model) renderNode(n *tree.Node, guide string) string {
 	return line
 }
 
+// isHeading reports whether a node is one of the tree's headings: the root
+// or a project, which are drawn in bold rather than in a status colour.
+func isHeading(n *tree.Node) bool {
+	return n.Kind == tree.KindRoot || n.Kind == tree.KindProject
+}
+
+// testCount is "4 tests", or "1 test".
+func testCount(n int) string {
+	if n == 1 {
+		return "1 test"
+	}
+	return fmt.Sprintf("%d tests", n)
+}
+
 // renderCounts is vitest's "(4 tests | 1 failed | 1 skipped)".
 func (m *Model) renderCounts(c tree.Counts) string {
-	parts := []string{fmt.Sprintf("%d tests", c.Total)}
-	if c.Total == 1 {
-		parts[0] = "1 test"
-	}
+	parts := []string{testCount(c.Total)}
 	if c.Running > 0 {
 		parts = append(parts, styleRunning.Render(fmt.Sprintf("%d running", c.Running)))
 	}
@@ -506,15 +539,15 @@ func (m *Model) renderCounts(c tree.Counts) string {
 	return styleDim.Render("(") + strings.Join(parts, sep) + styleDim.Render(")")
 }
 
-// treeIcon is a node's glyph in the tree: a fold arrow for a project, class
-// or theory, a status glyph for a test, each in the colour of its status.
-// While tests run, only the top-most running node (the project, since
-// running rolls up) spins; everything running beneath it is simply drawn
-// in the running colour, so the tree does not flicker all over.
+// treeIcon is a node's glyph in the tree: a fold arrow for the root, a
+// project, a class or a theory, a status glyph for a test, each in the
+// colour of its status. While tests run only the running project spins;
+// everything running beneath it, and the root above it, is simply drawn in
+// the running colour, so the tree does not flicker all over.
 func (m *Model) treeIcon(n *tree.Node) string {
 	status := n.Status()
 	if status == tree.StatusRunning {
-		if n.Parent == nil || n.Parent.Status() != tree.StatusRunning {
+		if n.Kind == tree.KindProject {
 			return m.spin.View()
 		}
 		if n.IsLeaf() {
@@ -562,11 +595,15 @@ func (m *Model) statusIcon(s tree.Status) string {
 	return styleDim.Render(iconNone)
 }
 
-// breadcrumb is "Project › Class › Method(args)" for a failure header.
+// breadcrumb is "Project › Class › Method(args)" for a failure header. The
+// root is left out: it is above every test, so naming it says nothing.
 func breadcrumb(l *tree.Node) string {
 	var parts []string
-	for n := l; n != nil; n = n.Parent {
+	for n := l; n != nil && n.Kind != tree.KindRoot; n = n.Parent {
 		parts = append([]string{n.Name}, parts...)
+	}
+	if len(parts) == 0 {
+		return l.Name // the root itself
 	}
 	return strings.Join(parts, " › ")
 }
@@ -627,11 +664,12 @@ func fitBottom(stats []string, height int) []string {
 }
 
 // statsLines is the block beside the tree, in two parts. The head stays at
-// the top of the pane: what dtest is doing, then what the solution holds,
-// its test projects and its total number of tests. The rest hangs from the
-// bottom and describes the last batch of runs: how many tests it covered,
-// how they turned out, when it started and how long it took, then the key
-// hint. Every row is always present so the block never changes shape.
+// the top of the pane: what dtest is doing, then how many test projects the
+// solution holds. The rest hangs from the bottom and describes the last
+// batch of runs: how many tests it covered, how they turned out, when it
+// started and how long its tests took, then the key hint. The total number
+// of tests is not here; the root of the tree carries it. Every row is
+// always present so the block never changes shape.
 func (m *Model) statsLines() (head, rows []string) {
 	// Failures are left out of the project tally: this row says what the
 	// solution holds, and the run summary below is where failures belong.
@@ -645,19 +683,10 @@ func (m *Model) statsLines() (head, rows []string) {
 			pc.Skipped++
 		}
 	}
-	c := m.tree.Counts()
 	start, dur := styleDim.Render("–"), styleDim.Render("–")
 	if !m.batchStart.IsZero() {
-		end := m.batchEnd
-		if end.IsZero() {
-			end = now()
-		}
-		var tests time.Duration
-		for _, p := range m.tree.Projects {
-			tests += p.Duration()
-		}
 		start = m.batchStart.Format("15:04:05")
-		dur = formatDuration(end.Sub(m.batchStart)) + styleDim.Render(fmt.Sprintf(" (tests %s)", formatDuration(tests)))
+		dur = formatDuration(m.batchDuration())
 	}
 	count := func(n int, style lipgloss.Style) string {
 		if n == 0 {
@@ -669,7 +698,6 @@ func (m *Model) statsLines() (head, rows []string) {
 	head = []string{
 		m.stateLine(),
 		summaryLabel("Test Projects") + strings.Join(summaryParts(pc, false), styleDim.Render(" | ")),
-		summaryLabel("Total tests") + fmt.Sprint(c.Total),
 	}
 	rows = []string{
 		summaryLabel("Tests") + count(ran.Total, lipgloss.NewStyle()),
@@ -749,6 +777,7 @@ var helpRows = []helpRow{
 	{"gg / G", "to jump to the top / bottom"},
 	{"ctrl+d / ctrl+u", "to move half a page (ctrl+e / ctrl+y scroll the log without moving)"},
 	{"l / h", "to expand / collapse a project, class or theory"},
+	{"L / H", "to expand / collapse the whole tree"},
 	{"enter or r", "to run the selected project, class or test"},
 	{"A", "to run every project"},
 	{"F", "to rerun only the failed tests"},

@@ -1,5 +1,5 @@
-// Package tree arranges tests into project → class → method → case nodes
-// and tracks their status.
+// Package tree arranges tests into root → project → class → method → case
+// nodes and tracks their status.
 package tree
 
 import (
@@ -15,7 +15,8 @@ import (
 type Kind int
 
 const (
-	KindProject Kind = iota
+	KindRoot Kind = iota // the single "All Tests" node above the projects
+	KindProject
 	KindClass
 	KindMethod
 	KindCase // one data row of a theory / parameterised test
@@ -53,12 +54,15 @@ type Node struct {
 // case, or a method without cases.
 func (n *Node) IsLeaf() bool { return len(n.Children) == 0 && n.Kind >= KindMethod }
 
-// Project returns the project node the node belongs to.
+// Project returns the project node the node belongs to, or nil for the
+// root, which spans them all.
 func (n *Node) Project() *Node {
-	for n.Parent != nil {
-		n = n.Parent
+	for c := n; c != nil; c = c.Parent {
+		if c.Kind == KindProject {
+			return c
+		}
 	}
-	return n
+	return nil
 }
 
 // Depth is the number of ancestors of the node.
@@ -181,15 +185,23 @@ func (n *Node) Class() (class, method string) {
 	return "", ""
 }
 
-// Tree holds one node per project.
+// Tree holds one node per project, all of them under a single root so the
+// whole solution can be selected, run and read as one.
 type Tree struct {
+	Root     *Node
 	Projects []*Node
 	leaves   map[*Node]map[string]*Node // by project, then display name
 }
 
+// RootName labels the node above every project.
+const RootName = "All Tests"
+
 // New returns an empty tree.
 func New() *Tree {
-	return &Tree{leaves: map[*Node]map[string]*Node{}}
+	return &Tree{
+		Root:   &Node{Kind: KindRoot, Name: RootName, FQN: RootName, Expanded: true},
+		leaves: map[*Node]map[string]*Node{},
+	}
 }
 
 // AddProject adds a project node for the project file at path, expanded,
@@ -201,7 +213,8 @@ func (t *Tree) AddProject(path string) *Node {
 		}
 	}
 	name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
-	p := &Node{Kind: KindProject, Name: name, FQN: name, Path: path, Expanded: true}
+	p := &Node{Kind: KindProject, Name: name, FQN: name, Path: path, Parent: t.Root, Expanded: true}
+	t.Root.Children = append(t.Root.Children, p)
 	t.Projects = append(t.Projects, p)
 	t.leaves[p] = map[string]*Node{}
 	return p
@@ -363,16 +376,14 @@ func indexTopLevel(s string, c byte) int {
 // Matching leaves bring their ancestors along regardless of expansion, and
 // projects without a match are left out.
 func (t *Tree) Visible(query string, status Status) []*Node {
-	var rows []*Node
-	q := strings.ToLower(query)
-	for _, p := range t.Projects {
-		if q == "" && status == StatusNone {
-			rows = appendVisible(rows, p)
-		} else {
-			rows = appendMatching(rows, p, q, status)
-		}
+	if len(t.Projects) == 0 {
+		return nil // nothing to root
 	}
-	return rows
+	q := strings.ToLower(query)
+	if q == "" && status == StatusNone {
+		return appendVisible(nil, t.Root)
+	}
+	return appendMatching(nil, t.Root, q, status)
 }
 
 func appendVisible(rows []*Node, n *Node) []*Node {
@@ -406,13 +417,7 @@ func appendMatching(rows []*Node, n *Node, q string, status Status) []*Node {
 }
 
 // Leaves returns every leaf of the tree in order.
-func (t *Tree) Leaves() []*Node {
-	var out []*Node
-	for _, p := range t.Projects {
-		out = append(out, p.Leaves()...)
-	}
-	return out
-}
+func (t *Tree) Leaves() []*Node { return t.Root.Leaves() }
 
 // FoldByResult expands the interior nodes under project that hold a failure
 // and collapses the rest, so a finished run reads like a report: passing
@@ -426,16 +431,15 @@ func (t *Tree) FoldByResult(project *Node) {
 	}
 }
 
-// Counts tallies every leaf in the tree.
-func (t *Tree) Counts() Counts {
-	var c Counts
-	for _, p := range t.Projects {
-		pc := p.Counts()
-		c.Total += pc.Total
-		c.Running += pc.Running
-		c.Passed += pc.Passed
-		c.Failed += pc.Failed
-		c.Skipped += pc.Skipped
+// SetExpanded opens or closes every interior node at once, projects
+// included, for expand-all and collapse-all.
+func (t *Tree) SetExpanded(expanded bool) {
+	for _, n := range collect(t.Root) {
+		if !n.IsLeaf() {
+			n.Expanded = expanded
+		}
 	}
-	return c
 }
+
+// Counts tallies every leaf in the tree.
+func (t *Tree) Counts() Counts { return t.Root.Counts() }

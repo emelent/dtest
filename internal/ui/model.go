@@ -102,7 +102,6 @@ type Model struct {
 	events   chan tea.Msg // build events
 
 	batchStart time.Time           // when the current sequence of runs began
-	batchEnd   time.Time           // when it finished; zero while running
 	batch      map[*tree.Node]bool // the leaves of that sequence, for the summary
 	runsDone   bool                // at least one run has finished
 
@@ -342,11 +341,11 @@ func (m *Model) enqueue(nodes []*tree.Node) tea.Cmd {
 	// Nothing running means this starts a new batch, so the summary beside
 	// the tree describes these runs and not the last ones.
 	if m.run == nil {
-		m.batchStart, m.batchEnd, m.batch = now(), time.Time{}, nil
+		m.batchStart, m.batch = now(), nil
 	}
 	byProject := map[*tree.Node][]*tree.Node{}
 	var order []*tree.Node
-	for _, n := range nodes {
+	for _, n := range expandRoots(nodes) {
 		p := n.Project()
 		if _, ok := byProject[p]; !ok {
 			order = append(order, p)
@@ -394,6 +393,19 @@ func (m *Model) addToBatch(leaves ...*tree.Node) {
 	}
 }
 
+// batchDuration is how long the batch's tests took, added up. It is the
+// tests' own time, not the wall clock: the gaps between runs, the dotnet
+// start-up and the build are not the suite's to answer for.
+func (m *Model) batchDuration() time.Duration {
+	var total time.Duration
+	for l := range m.batch {
+		if l.Result != nil {
+			total += l.Result.Duration
+		}
+	}
+	return total
+}
+
 // batchCounts tallies the batch by the state its tests are in now. A test
 // whose run was cancelled or dropped has no state and falls out, so the
 // rows always add up to the total above them.
@@ -417,6 +429,20 @@ func (m *Model) batchCounts() tree.Counts {
 		c.Total++
 	}
 	return c
+}
+
+// expandRoots replaces the root, which belongs to no single project, with
+// the projects beneath it, so running "All Tests" runs each of them.
+func expandRoots(nodes []*tree.Node) []*tree.Node {
+	out := make([]*tree.Node, 0, len(nodes))
+	for _, n := range nodes {
+		if n.Kind == tree.KindRoot {
+			out = append(out, n.Children...)
+			continue
+		}
+		out = append(out, n)
+	}
+	return out
 }
 
 // dropQueue forgets the queued runs and clears their tests' queued marks.
@@ -487,7 +513,6 @@ func (m *Model) handleRunEvent(msg runEventMsg) tea.Cmd {
 			cmd = m.setStatus(label+": "+e.Err.Error(), true)
 		}
 		if len(m.queue) == 0 {
-			m.batchEnd = now()
 			m.runsDone = true
 		}
 		m.refresh()
@@ -626,6 +651,9 @@ func locationInLine(line string) (dotnet.Location, bool) {
 // project, the class or method declaration otherwise, falling back to the
 // failure position from a stack trace.
 func (m *Model) locateNode(n *tree.Node) (dotnet.Location, bool) {
+	if n.Kind == tree.KindRoot {
+		return dotnet.Location{}, false // it spans every project
+	}
 	if n.Kind == tree.KindProject {
 		return dotnet.Location{File: n.Path}, true
 	}

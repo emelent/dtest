@@ -89,13 +89,13 @@ func containsAll(t *testing.T, v string, wants ...string) {
 
 func TestLayoutAndNavigation(t *testing.T) {
 	m := newTestModel(t)
-	// Fresh: project, then its two classes collapsed.
-	if len(m.rows) != 3 || m.rows[1].Name != "MathTests" {
+	// Fresh: the root, the project, then its two classes collapsed.
+	if len(m.rows) != 4 || m.rows[2].Name != "MathTests" {
 		t.Fatalf("rows = %d", len(m.rows))
 	}
 	v := view(m)
-	containsAll(t, v, "DTEST  Sample  v1.2.3", "⎯⎯ Log  Alpha.Tests ⎯", "⎯⎯ Tests ⎯", "▾ Alpha.Tests (5 tests)", "▸ MathTests (4 tests)", "5 not run (5)", "Not run yet",
-		statRow("Test Projects", "(1)"), statRow("Total tests", "5"), statRow("Tests", "0"), statRow("Failed", "0"),
+	containsAll(t, v, "DTEST  Sample  v1.2.3", "⎯⎯ Log  All Tests ⎯", "⎯⎯ Tests ⎯", "▾ All Tests (5 tests)", "▾ Alpha.Tests (5 tests)", "▸ MathTests (4 tests)", "5 not run (5)", "Not run yet",
+		statRow("Test Projects", "(1)"), statRow("Tests", "0"), statRow("Failed", "0"),
 		statRow("Skipped", "0"), statRow("Passed", "0"), statRow("Start at", "–"), statRow("Duration", "–"),
 		"press ? to show help, press q to quit")
 	if strings.Contains(v, "Summary") || strings.Contains(v, "│") || strings.Contains(v, "Ready") || strings.Count(v, "DTEST") != 1 {
@@ -156,8 +156,8 @@ func TestLayoutAndNavigation(t *testing.T) {
 	}
 	m.Update(tea.WindowSizeMsg{Width: 140, Height: 40})
 
-	press(m, "j", "l") // expand MathTests
-	if len(m.rows) != 6 || m.current().Name != "MathTests" {
+	press(m, "j", "j", "l") // expand MathTests
+	if len(m.rows) != 7 || m.current().Name != "MathTests" {
 		t.Fatalf("after l: %d rows on %q", len(m.rows), m.current().Name)
 	}
 	containsAll(t, view(m), "▾ MathTests (4 tests)", "· Adds", "▸ Theory (2 tests)")
@@ -173,7 +173,7 @@ func TestLayoutAndNavigation(t *testing.T) {
 	if m.cursor != 0 {
 		t.Fatalf("gg -> %d", m.cursor)
 	}
-	press(m, "j", "j", "j", "j", "space")
+	press(m, "j", "j", "j", "j", "j", "space")
 	if m.current().Name != "Theory" || !strings.Contains(view(m), "(n: 1)") {
 		t.Fatalf("space should expand the theory, on %q", m.current().Name)
 	}
@@ -205,7 +205,7 @@ func TestLayoutAndNavigation(t *testing.T) {
 		t.Fatalf("ctrl+u -> %d", m.cursor)
 	}
 	// One highlighted row in the log (dim, unfocused), one in the tree.
-	if marked := markedLines(m); len(marked) != 2 || !strings.Contains(marked[1], "Alpha.Tests (5 tests)") {
+	if marked := markedLines(m); len(marked) != 2 || !strings.Contains(marked[1], "All Tests (5 tests)") {
 		t.Fatalf("markers = %v", marked)
 	}
 	if !strings.Contains(m.View().Content, bgUnfocused) || !strings.Contains(m.View().Content, bgFocused) {
@@ -269,7 +269,7 @@ func TestPaneFocusAndLogScroll(t *testing.T) {
 	fails := m.tree.Lookup(m.tree.Projects[0], "Alpha.Tests.MathTests.Fails")
 	fails.Result = &dotnet.Result{Outcome: dotnet.OutcomeFailed, Message: "boom", StackTrace: strings.Repeat("   at X in /src/a.cs:line 1\n", 60)}
 	fails.SetStatus(tree.StatusFailed)
-	press(m, "j", "l", "j", "j") // select Fails
+	press(m, "j", "j", "l", "j", "j") // select Fails
 	if m.current() != fails || m.log.YOffset() != 0 {
 		t.Fatalf("selecting a node shows its log from the top: %q offset %d", m.current().Name, m.log.YOffset())
 	}
@@ -340,7 +340,7 @@ func TestFilter(t *testing.T) {
 	if !m.filtering || m.query != "wai" {
 		t.Fatalf("filtering=%v query=%q", m.filtering, m.query)
 	}
-	if len(m.rows) != 3 || m.rows[2].Name != "Waits" {
+	if len(m.rows) != 4 || m.rows[3].Name != "Waits" {
 		t.Fatalf("filtered rows = %d", len(m.rows))
 	}
 	v := view(m)
@@ -361,7 +361,7 @@ func TestFilter(t *testing.T) {
 		t.Fatalf("after enter: filtering=%v query=%q", m.filtering, m.query)
 	}
 	press(m, "esc")
-	if m.query != "" || len(m.rows) != 3 {
+	if m.query != "" || len(m.rows) != 4 {
 		t.Fatalf("esc should clear the filter: %q %d", m.query, len(m.rows))
 	}
 	press(m, "/", "a", "esc")
@@ -398,7 +398,7 @@ func TestRunFlow(t *testing.T) {
 	now = func() time.Time { return clock }
 	t.Cleanup(func() { now = time.Now })
 
-	press(m, "j", "r") // MathTests
+	press(m, "j", "j", "r") // MathTests
 	<-f.started
 	if f.project != projA || f.filter != "FullyQualifiedName~Alpha.Tests.MathTests." {
 		t.Fatalf("run %q %q", f.project, f.filter)
@@ -408,7 +408,7 @@ func TestRunFlow(t *testing.T) {
 		t.Fatalf("class should be running: %+v", class.Counts())
 	}
 	v := view(m)
-	containsAll(t, v, "(5 tests | 4 running)", "19:10:48", statRow("Total tests", "5"), statRow("Tests", "4"), statRow("Failed", "0"), statRow("Passed", "0"))
+	containsAll(t, v, "(5 tests | 4 running)", "19:10:48", statRow("Tests", "4"), statRow("Failed", "0"), statRow("Passed", "0"))
 	// Only the project row spins; the running class beneath keeps its arrow.
 	_, bottom, _ := strings.Cut(v, "⎯⎯ Tests")
 	spinners := 0
@@ -473,12 +473,11 @@ func TestRunFlow(t *testing.T) {
 		"× Fails 0.001s",
 		"▸ Theory (2 tests | 1 skipped)",
 		statRow("Test Projects", "(1)"), // failures live in the run summary, not here
-		statRow("Total tests", "6"),
 		statRow("Tests", "5"),
 		statRow("Failed", "1"),
 		statRow("Skipped", "1"),
 		statRow("Passed", "3"),
-		statRow("Duration", "2m34s (tests 0.033s)"),
+		statRow("Duration", "0.033s"), // the tests' own time, not the wall clock
 	)
 	if strings.Contains(v, "Tests failed.") || strings.Contains(v, "Tests passed.") {
 		t.Error("no result line in the stats")
@@ -515,11 +514,11 @@ func TestRunFlow(t *testing.T) {
 	containsAll(t, view(m), "⎯⎯ Log  Alpha.Tests › MathTests › Adds ⎯", "✓ Passed in 0.032s")
 	// f narrows the tree to failures, s to skipped tests, esc widens it.
 	press(m, "f")
-	if len(m.rows) != 3 || m.rows[2].Name != "Fails" || !strings.Contains(view(m), "Tests  failed only") {
+	if len(m.rows) != 4 || m.rows[3].Name != "Fails" || !strings.Contains(view(m), "Tests  failed only") {
 		t.Fatalf("failed-only rows = %d\n%s", len(m.rows), view(m))
 	}
 	press(m, "s")
-	if len(m.rows) != 4 || m.rows[3].Name != "(n: 2)" || !strings.Contains(view(m), "skipped only") {
+	if len(m.rows) != 5 || m.rows[4].Name != "(n: 2)" || !strings.Contains(view(m), "skipped only") {
 		t.Fatalf("skipped-only rows = %d", len(m.rows))
 	}
 	press(m, "s")
@@ -628,7 +627,7 @@ func TestOutputToggleAndHelp(t *testing.T) {
 	}
 	press(m, "v")
 	containsAll(t, view(m), "⎯⎯ Output  build ⎯", "Determining projects", "Build FAILED.")
-	m.logs[projA] = []string{"$ dotnet test", "  Passed X [1 ms]"}
+	m.logs[projA], m.lastLog = []string{"$ dotnet test", "  Passed X [1 ms]"}, projA
 	m.refresh()
 	containsAll(t, view(m), "⎯⎯ Output  Alpha.Tests ⎯", "Passed X")
 	press(m, "v")
@@ -663,14 +662,19 @@ func TestOpenInEditor(t *testing.T) {
 	}
 	t.Cleanup(func() { hasServer, openInServer, locate = nil, nil, dotnet.Locate })
 
-	press(m, "j", "l", "j", "o") // Adds
+	press(m, "j", "j", "l", "j", "o") // Adds
 	if len(opened) != 2 || opened[0] != "/tmp/nvim.Sample.sock" || opened[1] != "/src/Alpha.Tests/UnitTest1.cs" || lines[0] != 7 {
 		t.Fatalf("opened = %v lines = %v", opened, lines)
 	}
 	if !strings.Contains(m.status, "Sent UnitTest1.cs:7") {
 		t.Fatalf("status = %q", m.status)
 	}
-	press(m, "g", "g", "o") // project opens its file
+	// The root spans every project, so it has no one file to open.
+	press(m, "g", "g", "o")
+	if n := len(opened); n != 2 || !strings.Contains(m.status, "No source location for All Tests") {
+		t.Fatalf("root open = %v status = %q", opened, m.status)
+	}
+	press(m, "j", "o") // the project opens its own file
 	if opened[len(opened)-1] != projA {
 		t.Fatalf("project open = %v", opened)
 	}
@@ -830,14 +834,18 @@ func TestSummaryCountsLastRun(t *testing.T) {
 		pass("Alpha.Tests.MathTests.Adds"), fail("Alpha.Tests.MathTests.Fails"),
 		pass("Alpha.Tests.MathTests.Theory(n: 1)"), pass("Alpha.Tests.MathTests.Theory(n: 2)"),
 		pass("Alpha.Tests.SlowTests.Waits"))
-	containsAll(t, view(m), statRow("Total tests", "5"), statRow("Tests", "5"), statRow("Failed", "1"), statRow("Passed", "4"))
+	// Four of the five took a millisecond each; the failure took none.
+	containsAll(t, view(m), statRow("Tests", "5"), statRow("Failed", "1"), statRow("Passed", "4"),
+		statRow("Duration", "0.004s"))
 
 	// Then just SlowTests, which passes. The failure elsewhere is still in
 	// the tree, but this run had none of it.
 	press(m, "G", "r")
 	finishRun(t, m, f, pass("Alpha.Tests.SlowTests.Waits"))
 	v := view(m)
-	containsAll(t, v, statRow("Total tests", "5"), statRow("Tests", "1"), statRow("Failed", "0"), statRow("Passed", "1"))
+	// Duration is this run's tests, not every test that has ever run.
+	containsAll(t, v, statRow("Tests", "1"), statRow("Failed", "0"), statRow("Passed", "1"),
+		statRow("Duration", "0.001s"))
 	if !strings.Contains(v, "× Fails") {
 		t.Error("the earlier failure should still be in the tree")
 	}
@@ -846,14 +854,14 @@ func TestSummaryCountsLastRun(t *testing.T) {
 	}
 }
 
-// The state line and the totals stay at the top of the pane; the run
+// The state line and the project tally stay at the top of the pane; the run
 // summary stays at the bottom of it.
 func TestStatsHeadPinnedToTop(t *testing.T) {
 	m := newTestModel(t)
 	m.building = true
 	m.refresh()
 	lines := strings.Split(view(m), "\n")
-	var title, state, projects, total, hint int
+	var title, state, projects, hint int
 	for i, l := range lines {
 		switch {
 		case strings.Contains(l, "⎯⎯ Tests"):
@@ -862,14 +870,15 @@ func TestStatsHeadPinnedToTop(t *testing.T) {
 			state = i
 		case strings.Contains(l, statRow("Test Projects", "")):
 			projects = i
-		case strings.Contains(l, statRow("Total tests", "")):
-			total = i
 		case strings.Contains(l, "press q to quit"):
 			hint = i
 		}
 	}
-	if state != title+1 || projects != state+1 || total != projects+1 {
-		t.Errorf("head should be state, projects, total from the top of the pane: %d %d %d %d", title, state, projects, total)
+	if state != title+1 || projects != state+1 {
+		t.Errorf("head should be state then projects from the top of the pane: %d %d %d", title, state, projects)
+	}
+	if strings.Contains(view(m), "Total tests") {
+		t.Error("the total belongs to the root of the tree now, not the summary")
 	}
 	if hint != len(lines)-1 {
 		t.Errorf("the hint should be the last line, got %d of %d", hint, len(lines))
@@ -881,16 +890,17 @@ func TestStatsHeadPinnedToTop(t *testing.T) {
 // every level that has not ended yet.
 func TestTreeGuides(t *testing.T) {
 	m := newTestModel(t)
-	press(m, "j", "l", "j", "j", "j", "space") // expand MathTests, then Theory
+	press(m, "j", "j", "l", "j", "j", "j", "space") // expand MathTests, then Theory
 	want := []string{
-		"▾ Alpha.Tests (5 tests)",
-		"├─ ▾ MathTests (4 tests)",
-		"│  ├─ · Adds",
-		"│  ├─ · Fails",
-		"│  └─ ▾ Theory (2 tests)",
-		"│     ├─ · (n: 1)",
-		"│     └─ · (n: 2)",
-		"└─ ▸ SlowTests (1 test)",
+		"▾ All Tests (5 tests)",
+		"└─ ▾ Alpha.Tests (5 tests)",
+		"   ├─ ▾ MathTests (4 tests)",
+		"   │  ├─ · Adds",
+		"   │  ├─ · Fails",
+		"   │  └─ ▾ Theory (2 tests)",
+		"   │     ├─ · (n: 1)",
+		"   │     └─ · (n: 2)",
+		"   └─ ▸ SlowTests (1 test)",
 	}
 	got := treeRows(m)
 	if len(got) != len(want) {
@@ -903,7 +913,7 @@ func TestTreeGuides(t *testing.T) {
 	}
 	// Filtering hides rows, and the guides join up the ones that are left.
 	press(m, "/", "W", "a", "i", "enter")
-	wantFiltered := []string{"▾ Alpha.Tests (5 tests)", "└─ ▾ SlowTests (1 test)", "   └─ · Waits"}
+	wantFiltered := []string{"▾ All Tests (5 tests)", "└─ ▾ Alpha.Tests (5 tests)", "   └─ ▾ SlowTests (1 test)", "      └─ · Waits"}
 	if got := treeRows(m); strings.Join(got, "|") != strings.Join(wantFiltered, "|") {
 		t.Errorf("filtered guides = %q", got)
 	}
@@ -966,5 +976,98 @@ func TestQueuedIsGrey(t *testing.T) {
 	}
 	if strings.Contains(styleQueued.Render("x"), "36") {
 		t.Error("queued should be grey, not cyan")
+	}
+}
+
+// L and H fold the whole tree at once, and the cursor comes to rest on the
+// nearest row still visible.
+func TestExpandAndCollapseAll(t *testing.T) {
+	m := newTestModel(t)
+	press(m, "L")
+	want := []string{
+		"▾ All Tests (5 tests)",
+		"└─ ▾ Alpha.Tests (5 tests)",
+		"   ├─ ▾ MathTests (4 tests)",
+		"   │  ├─ · Adds",
+		"   │  ├─ · Fails",
+		"   │  └─ ▾ Theory (2 tests)",
+		"   │     ├─ · (n: 1)",
+		"   │     └─ · (n: 2)",
+		"   └─ ▾ SlowTests (1 test)",
+		"      └─ · Waits",
+	}
+	if got := treeRows(m); strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("after L:\n%s", strings.Join(got, "\n"))
+	}
+	// From a deep row, H collapses everything and the cursor rides up to
+	// the project that is still on screen.
+	press(m, "G")
+	if m.current().Name != "Waits" {
+		t.Fatalf("G -> %q", m.current().Name)
+	}
+	press(m, "H")
+	if got := treeRows(m); len(got) != 1 || got[0] != "▸ All Tests (5 tests)" {
+		t.Errorf("after H: %q", got)
+	}
+	if m.cursor != 0 || m.current().Kind != tree.KindRoot {
+		t.Errorf("cursor = %d on %q", m.cursor, m.current().Name)
+	}
+	// Folding is off while the tree is filtered, so neither key disturbs it.
+	press(m, "L", "/", "W", "a", "i", "enter")
+	before := treeRows(m)
+	press(m, "H")
+	if got := treeRows(m); strings.Join(got, "|") != strings.Join(before, "|") {
+		t.Errorf("H while filtered changed the tree:\n%s", strings.Join(got, "\n"))
+	}
+}
+
+// The root gathers every project: it rolls up their counts, running it runs
+// each of them, and its log lists every failure in the solution.
+func TestRootNode(t *testing.T) {
+	f := stubRun(t)
+	m := newTestModel(t)
+	beta := m.tree.AddProject("/src/Beta.Tests/Beta.Tests.csproj")
+	m.tree.SetTests(beta, []string{"Beta.Tests.ApiTests.Pings"})
+	m.refresh()
+	root := m.rows[0]
+	if root.Kind != tree.KindRoot || root.Name != tree.RootName || root.Counts().Total != 6 {
+		t.Fatalf("root = %q %+v", root.Name, root.Counts())
+	}
+	// enter on the root queues a run for every project, in order.
+	press(m, "g", "g", "enter")
+	<-f.started
+	if f.project != projA || f.filter != "" {
+		t.Fatalf("first run = %q %q", f.project, f.filter)
+	}
+	if len(m.queue) != 1 || m.queue[0].project != beta {
+		t.Fatalf("the second project should be queued, got %d", len(m.queue))
+	}
+	f.emit(dotnet.DoneEvent{Results: []dotnet.Result{
+		{Name: "Alpha.Tests.MathTests.Fails", Outcome: dotnet.OutcomeFailed, Message: "alpha boom"},
+	}})
+	m.Update(<-m.runEvents())
+	<-f.started
+	f.emit(dotnet.DoneEvent{Results: []dotnet.Result{
+		{Name: "Beta.Tests.ApiTests.Pings", Outcome: dotnet.OutcomeFailed, Message: "beta boom"},
+	}})
+	m.Update(<-m.runEvents())
+
+	// Back on the root, its log reports both failures, from both projects.
+	press(m, "g", "g")
+	v := view(m)
+	containsAll(t, v, "⎯⎯ Log  All Tests ⎯", "× All Tests",
+		"FAIL  Alpha.Tests › MathTests › Fails", "alpha boom",
+		"FAIL  Beta.Tests › ApiTests › Pings", "beta boom")
+	if strings.Contains(v, "All Tests › Alpha") {
+		t.Error("the root should not pad the breadcrumbs beneath it")
+	}
+	// Its own row carries the total and nothing else: no tally of how the
+	// run went, and no time, both of which belong below it.
+	rows := treeRows(m)
+	if rows[0] != "▾ All Tests (6 tests)" {
+		t.Errorf("root row = %q", rows[0])
+	}
+	if !strings.Contains(rows[1], "1 failed") {
+		t.Errorf("the project below it still reports its run: %q", rows[1])
 	}
 }
