@@ -202,8 +202,8 @@ func New(name, path string) *Tree {
 	}
 }
 
-// AddProject adds a project node for the project file at path, expanded,
-// or returns the existing one.
+// AddProject adds a project node for the project file at path, collapsed so
+// a fresh tree reads as a list of projects, or returns the existing one.
 func (t *Tree) AddProject(path string) *Node {
 	for _, p := range t.Projects {
 		if p.Path == path {
@@ -211,7 +211,7 @@ func (t *Tree) AddProject(path string) *Node {
 		}
 	}
 	name := strings.TrimSuffix(filepath.Base(path), filepath.Ext(path))
-	p := &Node{Kind: KindProject, Name: name, FQN: name, Path: path, Parent: t.Root, Expanded: true}
+	p := &Node{Kind: KindProject, Name: name, FQN: name, Path: path, Parent: t.Root}
 	t.Root.Children = append(t.Root.Children, p)
 	t.Projects = append(t.Projects, p)
 	t.leaves[p] = map[string]*Node{}
@@ -448,13 +448,18 @@ func (t *Tree) Leaves() []*Node { return t.Root.Leaves() }
 
 // FoldByResult expands the interior nodes under target that hold a failure
 // and collapses the rest, so a finished run reads like a report: passing
-// classes take one line, failing ones show their tests.
+// classes take one line, failing ones show their tests. A project is only
+// ever opened, never folded shut, so a run cannot close the part of the
+// tree that is being read; the root always stays open.
 func (t *Tree) FoldByResult(target *Node) {
 	for _, n := range collect(target) {
-		if n.Kind <= KindProject || n.IsLeaf() {
-			continue // the root and the projects keep their own folding
+		switch {
+		case n.Kind == KindRoot || n.IsLeaf():
+		case n.Kind == KindProject:
+			n.Expanded = n.Expanded || n.Counts().Failed > 0
+		default:
+			n.Expanded = n.Counts().Failed > 0
 		}
-		n.Expanded = n.Counts().Failed > 0
 	}
 }
 

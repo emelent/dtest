@@ -149,6 +149,20 @@ func (m *Model) handleLogKey(key string) (bool, tea.Cmd) {
 		m.log.ScrollDown(1)
 	case "ctrl+y":
 		m.log.ScrollUp(1)
+	case "V":
+		// Linewise, as vim's V is: the motions above extend it from here.
+		if m.selAnchor >= 0 {
+			m.selAnchor = -1
+		} else {
+			m.selAnchor = m.logCursor
+		}
+	case "y":
+		return true, m.copyLog()
+	case "esc":
+		if m.selAnchor < 0 {
+			return false, nil
+		}
+		m.selAnchor = -1
 	default:
 		return false, nil
 	}

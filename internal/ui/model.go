@@ -90,6 +90,8 @@ type Model struct {
 	logLines      []string   // the log's lines, unstyled, for the cursor and o
 	logCursor     int        // the log's cursor line
 	logStarts     []int      // first display row of each log line, once wrapped
+	selAnchor     int        // where a log selection started; -1 when there is none
+	dragging      bool       // the mouse button is down over the log
 	treeView      viewport.Model
 	treeSig       string
 	spin          spinner.Model
@@ -103,6 +105,7 @@ type Model struct {
 	events   chan tea.Msg // build events
 
 	batchStart time.Time           // when the current sequence of runs began
+	batchEnd   time.Time           // when it finished; zero while it is going
 	batch      map[*tree.Node]bool // the leaves of that sequence, for the summary
 	runsDone   bool                // at least one run has finished
 
@@ -135,6 +138,7 @@ func New(cfg Config) *Model {
 		log:       viewport.New(),
 		treeView:  viewport.New(),
 		focus:     paneTree,
+		selAnchor: -1,
 	}
 	m.log.MouseWheelEnabled = true
 	m.treeView.MouseWheelEnabled = true
@@ -320,6 +324,15 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, cmd
 
+	case tea.MouseClickMsg:
+		return m, m.startSelect(msg.Y)
+
+	case tea.MouseMotionMsg:
+		return m, m.dragSelect(msg.Y)
+
+	case tea.MouseReleaseMsg:
+		return m, m.endSelect()
+
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
 	}
@@ -342,7 +355,7 @@ func (m *Model) enqueue(nodes []*tree.Node) tea.Cmd {
 	// Nothing running means this starts a new batch, so the summary above
 	// the tree describes these runs and not the last ones.
 	if m.run == nil {
-		m.batchStart, m.batch = now(), nil
+		m.batchStart, m.batchEnd, m.batch = now(), time.Time{}, nil
 	}
 	// The root is the solution, so running it is one `dotnet test` over the
 	// whole thing rather than one invocation per project.
@@ -406,17 +419,20 @@ func (m *Model) addToBatch(leaves ...*tree.Node) {
 	}
 }
 
-// batchDuration is how long the batch's tests took, added up. It is the
-// tests' own time, not the wall clock: the gaps between runs, the dotnet
-// start-up and the build are not the suite's to answer for.
+// batchDuration is how long the batch has been going, and how long it took
+// once it is over. It is wall-clock time rather than the sum of the tests'
+// own: a sum only moves when a result lands, so it sits still through every
+// slow test, and a timer that stops for seconds at a time reads as a stuck
+// program rather than a slow one.
 func (m *Model) batchDuration() time.Duration {
-	var total time.Duration
-	for l := range m.batch {
-		if l.Result != nil {
-			total += l.Result.Duration
-		}
+	if m.batchStart.IsZero() {
+		return 0
 	}
-	return total
+	end := m.batchEnd
+	if end.IsZero() {
+		end = now()
+	}
+	return end.Sub(m.batchStart)
 }
 
 // batchCounts tallies the batch by the state its tests are in now. A test
@@ -512,7 +528,7 @@ func (m *Model) handleRunEvent(msg runEventMsg) tea.Cmd {
 			cmd = m.setStatus(label+": "+e.Err.Error(), true)
 		}
 		if len(m.queue) == 0 {
-			m.runsDone = true
+			m.batchEnd, m.runsDone = now(), true
 		}
 		m.refresh()
 		return tea.Batch(cmd, m.pump())
@@ -671,6 +687,97 @@ func (m *Model) locateNode(n *tree.Node) (dotnet.Location, bool) {
 		m.locations[key] = loc
 	}
 	return loc, ok
+}
+
+// Selecting and copying log lines.
+
+// logLineAt maps a screen row to the log line drawn on it, or -1 when the
+// row is not part of the log's body.
+func (m *Model) logLineAt(y int) int {
+	top := headerH + titleH
+	if y < top || y >= top+m.log.Height() || len(m.logStarts) == 0 {
+		return -1
+	}
+	row := y - top + m.log.YOffset()
+	line := 0
+	for i, start := range m.logStarts {
+		if start > row {
+			break
+		}
+		line = i
+	}
+	return line
+}
+
+// startSelect anchors a selection where the mouse went down, and moves the
+// log's cursor there. A press outside the log is left alone.
+func (m *Model) startSelect(y int) tea.Cmd {
+	line := m.logLineAt(y)
+	if line < 0 {
+		return nil
+	}
+	m.focus = paneLog
+	m.dragging = true
+	m.selAnchor = line
+	m.logCursor = line
+	m.refresh()
+	return nil
+}
+
+// dragSelect extends a selection to the line under the mouse.
+func (m *Model) dragSelect(y int) tea.Cmd {
+	if !m.dragging {
+		return nil
+	}
+	if line := m.logLineAt(y); line >= 0 {
+		m.moveLog(line - m.logCursor)
+		m.refresh()
+	}
+	return nil
+}
+
+// endSelect finishes a drag. A drag across more than one line copies what it
+// covered, the way selecting in a terminal does; a plain click just leaves
+// the cursor where it landed.
+func (m *Model) endSelect() tea.Cmd {
+	if !m.dragging {
+		return nil
+	}
+	m.dragging = false
+	if m.selAnchor == m.logCursor {
+		m.selAnchor = -1
+		m.refresh()
+		return nil
+	}
+	return m.copyLog()
+}
+
+// selection is the range of log lines a copy would take, the anchor to the
+// cursor while selecting, or the cursor's line alone.
+func (m *Model) selection() (from, to int) {
+	if len(m.logLines) == 0 {
+		return -1, -1
+	}
+	from, to = m.logCursor, m.logCursor
+	if m.selAnchor >= 0 {
+		from, to = min(m.selAnchor, m.logCursor), max(m.selAnchor, m.logCursor)
+	}
+	return clamp(from, len(m.logLines)), clamp(to, len(m.logLines))
+}
+
+// copyLog puts the selected lines, or the cursor's line, on the system
+// clipboard. It goes out as an OSC 52 escape, which the terminal acts on, so
+// it reaches the clipboard of whatever machine the terminal is running on
+// even when dtest is on the far side of an ssh session.
+func (m *Model) copyLog() tea.Cmd {
+	from, to := m.selection()
+	if from < 0 {
+		return m.setStatus("Nothing to copy", true)
+	}
+	text := strings.Join(m.logLines[from:to+1], "\n")
+	m.selAnchor = -1
+	m.refresh()
+	return tea.Batch(tea.SetClipboard(text), m.setStatus("Copied "+plural(to-from+1, "line"), false))
 }
 
 // Cursor.

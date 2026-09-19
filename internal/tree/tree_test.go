@@ -52,12 +52,16 @@ func TestBuildAndVisible(t *testing.T) {
 	if p.Name != "Alpha.Tests" {
 		t.Errorf("project name = %q", p.Name)
 	}
-	// Projects start expanded with their classes collapsed; class labels drop
-	// the project-name prefix.
+	// Only the root starts expanded, so a fresh tree reads as a list of
+	// projects.
 	got := names(tr.Visible("", StatusNone))
-	want := "Sample| Alpha.Tests|  Alpha.Other.X|  MathTests|  SlowTests"
+	want := "Sample| Alpha.Tests"
 	if got != want {
 		t.Fatalf("Visible =\n%s\nwant\n%s", got, want)
+	}
+	p.Expanded = true
+	if got := names(tr.Visible("", StatusNone)); got != "Sample| Alpha.Tests|  Alpha.Other.X|  MathTests|  SlowTests" {
+		t.Fatalf("expanded project =\n%s", got)
 	}
 	for _, c := range p.Children {
 		c.Expanded = true

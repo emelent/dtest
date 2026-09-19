@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"os/exec"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -31,8 +32,23 @@ func newTestModel(t *testing.T) *Model {
 		"Alpha.Tests.MathTests.Theory(n: 2)",
 		"Alpha.Tests.SlowTests.Waits",
 	})
+	p.Expanded = true // most of these tests navigate inside the project
 	m.refresh()
 	return m
+}
+
+// A fresh tree shows the solution and its projects, nothing more: projects
+// are collapsed until they are asked for.
+func TestProjectsStartCollapsed(t *testing.T) {
+	m := New(Config{Target: "/src/Sample.slnx"})
+	m.Update(tea.WindowSizeMsg{Width: 140, Height: 40})
+	p := m.tree.AddProject(projA)
+	m.tree.SetTests(p, []string{"Alpha.Tests.MathTests.Adds", "Alpha.Tests.SlowTests.Waits"})
+	m.refresh()
+	want := []string{"▾ Sample (1 project | 2 tests)", "└─ ▸ Alpha.Tests (2 tests)"}
+	if got := treeRows(m); strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Errorf("fresh tree = %q", got)
+	}
 }
 
 func press(m *Model, keys ...string) tea.Cmd {
@@ -77,6 +93,31 @@ func markedLines(m *Model) []string {
 // footerRow is the last line of the screen, as plain text: what dtest is
 // doing, or the summary of the last batch of runs.
 func footerRow(m *Model) string { return strings.TrimRight(ansi.Strip(m.renderFooter()), " ") }
+
+// clipboardOf reports the text a command would put on the clipboard.
+// bubbletea carries it in an unexported message whose underlying type is a
+// string, so its kind is what identifies it. The walk stops at the first
+// one, which also keeps it from running the five-second status tick that
+// rides along in the same batch.
+func clipboardOf(t *testing.T, cmd tea.Cmd) string {
+	t.Helper()
+	if cmd == nil {
+		return ""
+	}
+	switch msg := cmd().(type) {
+	case tea.BatchMsg:
+		for _, sub := range msg {
+			if s := clipboardOf(t, sub); s != "" {
+				return s
+			}
+		}
+	default:
+		if v := reflect.ValueOf(msg); v.Kind() == reflect.String {
+			return v.String()
+		}
+	}
+	return ""
+}
 
 func containsAll(t *testing.T, v string, wants ...string) {
 	t.Helper()
@@ -383,6 +424,12 @@ func TestRunFlow(t *testing.T) {
 	if got := footerRow(m); !strings.Contains(got, "Ran 0 tests in 0.000s at 19:10:48  ·  0 failed | 0 passed | 0 skipped") {
 		t.Errorf("a run in flight keeps the same shape: %q", got)
 	}
+	// The timer runs on its own, without waiting for a result to land.
+	clock = clock.Add(3 * time.Second)
+	if got := footerRow(m); !strings.Contains(got, "in 3.0s") {
+		t.Errorf("the timer should keep moving mid-run: %q", got)
+	}
+	clock = clock.Add(-3 * time.Second)
 	// Only the project row spins; the running class beneath keeps its arrow,
 	// and nothing in the log spins at all.
 	const dots = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
@@ -446,9 +493,9 @@ func TestRunFlow(t *testing.T) {
 		"▾ MathTests (5 tests | 1 failed | 1 skipped)",
 		"× Fails 0.001s",
 		"▸ Theory (2 tests | 1 skipped)",
-		// The projects part leaves failures out; the outcomes report them,
-		// and the time is the tests' own, not the wall clock.
-		"Ran 5 tests in 0.033s at 19:10:48  ·  1 failed | 3 passed | 1 skipped",
+		// The clock ran on for 2m34s between starting and finishing, and
+		// that is what the footer reports.
+		"Ran 5 tests in 2m34s at 19:10:48  ·  1 failed | 3 passed | 1 skipped",
 	)
 	if strings.Contains(v, "Tests failed.") || strings.Contains(v, "Tests passed.") {
 		t.Error("no result line in the stats")
@@ -740,18 +787,30 @@ func TestFormatDuration(t *testing.T) {
 	}
 }
 
+// A time is drawn in the quick colour up to the slow threshold and the slow
+// one past it, with the unit a faded shade of whichever it got. The
+// expectations are built from the styles rather than spelled out as escape
+// codes, so repainting the palette does not break the test that guards the
+// rule.
 func TestRenderDuration(t *testing.T) {
+	quick, slow := styleQuick, styleSlow
 	cases := map[time.Duration]string{
-		3 * time.Millisecond:           "\x1b[32m0.003\x1b[m\x1b[2;32ms\x1b[m",
-		slowDuration:                   "\x1b[32m0.300\x1b[m\x1b[2;32ms\x1b[m",
-		slowDuration + time.Second/100: "\x1b[33m0.310\x1b[m\x1b[2;33ms\x1b[m",
-		1201 * time.Millisecond:        "\x1b[33m1.2\x1b[m\x1b[2;33ms\x1b[m",
-		2*time.Minute + 34*time.Second: "\x1b[33m2m34s\x1b[m",
+		3 * time.Millisecond:           quick.Render("0.003") + quick.Faint(true).Render("s"),
+		slowDuration:                   quick.Render("0.300") + quick.Faint(true).Render("s"),
+		slowDuration + time.Second/100: slow.Render("0.310") + slow.Faint(true).Render("s"),
+		1201 * time.Millisecond:        slow.Render("1.2") + slow.Faint(true).Render("s"),
+		2*time.Minute + 34*time.Second: slow.Render("2m34s"), // one unit inside the number
 	}
 	for d, want := range cases {
 		if got := renderDuration(d); got != want {
 			t.Errorf("renderDuration(%v) = %q, want %q", d, got, want)
 		}
+	}
+	if quick.Render("x") == slow.Render("x") {
+		t.Error("quick and slow should not look the same")
+	}
+	if quick.Render("s") == quick.Faint(true).Render("s") {
+		t.Error("the unit should be a shade back from the number")
 	}
 }
 
@@ -806,8 +865,7 @@ func TestSummaryCountsLastRun(t *testing.T) {
 		pass("Alpha.Tests.MathTests.Adds"), fail("Alpha.Tests.MathTests.Fails"),
 		pass("Alpha.Tests.MathTests.Theory(n: 1)"), pass("Alpha.Tests.MathTests.Theory(n: 2)"),
 		pass("Alpha.Tests.SlowTests.Waits"))
-	// Four of the five took a millisecond each; the failure took none.
-	if got := footerRow(m); !strings.Contains(got, "Ran 5 tests in 0.004s") || !strings.Contains(got, "1 failed | 4 passed") {
+	if got := footerRow(m); !strings.Contains(got, "Ran 5 tests") || !strings.Contains(got, "1 failed | 4 passed") {
 		t.Errorf("after running everything: %q", got)
 	}
 
@@ -817,7 +875,7 @@ func TestSummaryCountsLastRun(t *testing.T) {
 	finishRun(t, m, f, pass("Alpha.Tests.SlowTests.Waits"))
 	v := view(m)
 	// The counts and the time are this run's, not every test that has run.
-	if got := footerRow(m); !strings.Contains(got, "Ran 1 test in 0.001s") || !strings.Contains(got, "1 passed") {
+	if got := footerRow(m); !strings.Contains(got, "Ran 1 test") || !strings.Contains(got, "0 failed | 1 passed") {
 		t.Errorf("after running one class: %q", got)
 	}
 	if !strings.Contains(v, "× Fails") {
@@ -941,7 +999,7 @@ func TestQueuedIsGrey(t *testing.T) {
 	if p.Status() != tree.StatusQueued {
 		t.Fatalf("the second project should be queued, got %v", p.Status())
 	}
-	press(m, "l", "l") // open its class so its tests are on screen
+	press(m, "l", "l", "l") // open the project and its class so its tests show
 	want := map[string]string{
 		"Beta.Tests": styleQueued.Bold(true).Render("Beta.Tests"),
 		"ApiTests":   styleQueued.Render("ApiTests"),
@@ -1116,17 +1174,23 @@ func TestSummaryLiveThenFinal(t *testing.T) {
 		t.Errorf("nothing reported yet: %q", got)
 	}
 	// One result lands, and the footer moves with it.
+	clock = clock.Add(2300 * time.Millisecond)
 	f.emit(dotnet.ResultEvent{Result: dotnet.Result{
-		Name: "Alpha.Tests.MathTests.Adds", Outcome: dotnet.OutcomePassed, Duration: 2300 * time.Millisecond}})
+		Name: "Alpha.Tests.MathTests.Adds", Outcome: dotnet.OutcomePassed, Duration: time.Millisecond}})
 	m.Update(<-m.runEvents())
 	if got := footerRow(m); !strings.Contains(got, "Ran 1 test in 2.3s at 21:36:37  ·  0 failed | 1 passed | 0 skipped") {
 		t.Errorf("mid-run summary = %q", got)
 	}
 	f.emit(dotnet.DoneEvent{Results: []dotnet.Result{{
-		Name: "Alpha.Tests.MathTests.Adds", Outcome: dotnet.OutcomePassed, Duration: 2300 * time.Millisecond}}})
+		Name: "Alpha.Tests.MathTests.Adds", Outcome: dotnet.OutcomePassed, Duration: time.Millisecond}}})
 	m.Update(<-m.runEvents())
 	if got := footerRow(m); !strings.Contains(got, "Ran 1 test in 2.3s at 21:36:37  ·  0 failed | 1 passed | 0 skipped") {
 		t.Errorf("the finished line reads the same: %q", got)
+	}
+	// The timer stopped with the batch: it does not run on afterwards.
+	clock = clock.Add(time.Minute)
+	if got := footerRow(m); !strings.Contains(got, "in 2.3s") {
+		t.Errorf("the timer should stop when the batch does: %q", got)
 	}
 	// A zero outcome is grey; one that happened is bold in its colour.
 	line := m.renderFooter()
@@ -1141,5 +1205,127 @@ func TestSummaryLiveThenFinal(t *testing.T) {
 	}
 	if styleElapsed.Render("2.3s") == styleDim.Render("2.3s") {
 		t.Error("the two times should not look the same")
+	}
+}
+
+// V starts a linewise selection the motions extend, y copies it, and the
+// text goes out as an OSC 52 clipboard escape.
+func TestSelectAndCopyLog(t *testing.T) {
+	m := newTestModel(t)
+	fails := m.tree.Lookup(m.tree.Projects[0], "Alpha.Tests.MathTests.Fails")
+	fails.Result = &dotnet.Result{Outcome: dotnet.OutcomeFailed, Message: "one\ntwo\nthree\nfour"}
+	fails.SetStatus(tree.StatusFailed)
+	press(m, "j", "j", "l", "j", "j") // select Fails in the tree
+	press(m, "ctrl+j")                // focus the log
+	if m.focus != paneLog || m.selAnchor != -1 {
+		t.Fatal("the log starts with no selection")
+	}
+	// V anchors, j extends, and the selected rows carry the selection's own
+	// background rather than the cursor's.
+	press(m, "j", "j", "V", "j")
+	from, to := m.selection()
+	if from != 2 || to != 3 {
+		t.Fatalf("selection = %d..%d of %q", from, to, m.logLines)
+	}
+	marked := 0
+	for _, l := range strings.Split(m.View().Content, "\n") {
+		if strings.Contains(l, bgSelected) {
+			marked++
+		}
+	}
+	if marked != 2 {
+		t.Errorf("two rows should be selected, %d are", marked)
+	}
+	// y copies them and clears the selection.
+	cmd := press(m, "y")
+	if m.selAnchor != -1 || !strings.Contains(m.status, "Copied 2 lines") {
+		t.Fatalf("after y: anchor=%d status=%q", m.selAnchor, m.status)
+	}
+	if want := strings.Join(m.logLines[2:4], "\n"); clipboardOf(t, cmd) != want {
+		t.Errorf("clipboard = %q, want %q", clipboardOf(t, cmd), want)
+	}
+	// With nothing selected, y takes the cursor's line alone.
+	cmd = press(m, "y")
+	if got := clipboardOf(t, cmd); got != m.logLines[m.logCursor] {
+		t.Errorf("single-line copy = %q", got)
+	}
+	// esc drops a selection without copying.
+	press(m, "V", "j", "esc")
+	if m.selAnchor != -1 {
+		t.Error("esc should drop the selection")
+	}
+}
+
+// Dragging the mouse over the log selects the lines it covers and copies
+// them on release; a plain click only moves the cursor.
+func TestMouseSelectLog(t *testing.T) {
+	m := newTestModel(t)
+	fails := m.tree.Lookup(m.tree.Projects[0], "Alpha.Tests.MathTests.Fails")
+	fails.Result = &dotnet.Result{Outcome: dotnet.OutcomeFailed, Message: "one\ntwo\nthree\nfour"}
+	fails.SetStatus(tree.StatusFailed)
+	press(m, "j", "j", "l", "j", "j")
+	top := headerH + titleH
+	m.Update(tea.MouseClickMsg{Y: top + 1, Button: tea.MouseLeft})
+	if m.focus != paneLog || m.logCursor != 1 || m.selAnchor != 1 {
+		t.Fatalf("click: focus=%v cursor=%d anchor=%d", m.focus, m.logCursor, m.selAnchor)
+	}
+	m.Update(tea.MouseMotionMsg{Y: top + 3, Button: tea.MouseLeft})
+	if from, to := m.selection(); from != 1 || to != 3 {
+		t.Fatalf("drag selection = %d..%d", from, to)
+	}
+	_, cmd := m.Update(tea.MouseReleaseMsg{Y: top + 3, Button: tea.MouseLeft})
+	if want := strings.Join(m.logLines[1:4], "\n"); clipboardOf(t, cmd) != want {
+		t.Errorf("clipboard = %q, want %q", clipboardOf(t, cmd), want)
+	}
+	if m.selAnchor != -1 || !strings.Contains(m.status, "Copied 3 lines") {
+		t.Errorf("after release: anchor=%d status=%q", m.selAnchor, m.status)
+	}
+	// A click with no drag just moves the cursor.
+	m.Update(tea.MouseClickMsg{Y: top + 2, Button: tea.MouseLeft})
+	_, cmd = m.Update(tea.MouseReleaseMsg{Y: top + 2, Button: tea.MouseLeft})
+	if m.logCursor != 2 || m.selAnchor != -1 || cmd != nil {
+		t.Errorf("plain click: cursor=%d anchor=%d cmd=%v", m.logCursor, m.selAnchor, cmd)
+	}
+}
+
+// The tree wears its colours a shade back so the footer's carry, and how
+// many tests a row holds is grey rather than plain.
+func TestTreeColoursAreDimmerThanTheFooter(t *testing.T) {
+	f := stubRun(t)
+	m := newTestModel(t)
+	press(m, "A")
+	<-f.started
+	f.emit(dotnet.DoneEvent{Results: []dotnet.Result{
+		{Name: "Alpha.Tests.MathTests.Adds", Outcome: dotnet.OutcomePassed, Duration: 32 * time.Millisecond},
+		{Name: "Alpha.Tests.MathTests.Fails", Outcome: dotnet.OutcomeFailed, Message: "boom"},
+	}})
+	m.Update(<-m.runEvents())
+
+	guides := treeGuides(m.rows)
+	var project string
+	for i, n := range m.rows {
+		if n.Name == "Alpha.Tests" {
+			project = m.renderNode(n, guides[i])
+		}
+	}
+	if project == "" {
+		t.Fatal("no project row")
+	}
+	if !strings.Contains(project, inTree(styleFailed).Render("1 failed")) {
+		t.Errorf("the tree's failures should be a shade back: %q", project)
+	}
+	if !strings.Contains(project, styleDim.Render("5 tests")) {
+		t.Errorf("how many tests there are should be grey: %q", project)
+	}
+	footer := m.renderFooter()
+	if !strings.Contains(footer, styleFailed.Bold(true).Render("1 failed")) {
+		t.Errorf("the footer's failures should carry: %q", ansi.Strip(footer))
+	}
+	if inTree(styleFailed).Render("x") == styleFailed.Bold(true).Render("x") {
+		t.Error("the two should not look the same")
+	}
+	// A duration in the tree is a shade back from the same time in the log.
+	if treeDuration(time.Second) == renderDuration(time.Second) {
+		t.Error("a tree duration should be dimmer than a log one")
 	}
 }

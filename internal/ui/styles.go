@@ -2,11 +2,15 @@ package ui
 
 import "charm.land/lipgloss/v2"
 
-// Colours are ANSI palette indexes so they follow the terminal theme.
+// The greys and the cyan are ANSI palette indexes, so they follow the
+// terminal theme. The three outcome colours are not: a theme's own red and
+// green are meant to shout, and a screen that is mostly results wants them
+// muted, so these are washed 256-colour shades picked to sit at the same
+// weight as each other.
 var (
-	colGreen  = lipgloss.Color("2")
-	colRed    = lipgloss.Color("1")
-	colYellow = lipgloss.Color("3")
+	colGreen  = lipgloss.Color("108") // sage
+	colRed    = lipgloss.Color("131") // brick
+	colYellow = lipgloss.Color("137") // amber
 	colCyan   = lipgloss.Color("6")
 	colGrey   = lipgloss.Color("8")
 	colWhite  = lipgloss.Color("15")
@@ -43,6 +47,7 @@ var (
 const (
 	bgFocused   = "\x1b[48;5;237m"
 	bgUnfocused = "\x1b[48;5;235m"
+	bgSelected  = "\x1b[48;5;60m" // a run of log lines picked out to copy
 )
 
 // Status glyphs, as vitest uses them, plus one for queued tests.

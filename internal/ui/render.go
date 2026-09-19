@@ -177,7 +177,7 @@ func (m *Model) refreshTree() {
 	for i, n := range m.rows {
 		line := ansi.Truncate(m.renderNode(n, guides[i]), m.treeView.Width(), "…")
 		if i == m.cursor {
-			line = highlight(line, m.treeView.Width(), m.focus == paneTree)
+			line = highlight(line, m.treeView.Width(), cursorBg(m.focus == paneTree))
 		}
 		lines = append(lines, line)
 	}
@@ -238,20 +238,35 @@ func (m *Model) refreshLog() {
 	}
 	changed := n != m.logNode
 	if changed {
-		m.logCursor = 0
+		m.logCursor, m.selAnchor = 0, -1 // a different log, so the selection is void
 	}
 	m.logCursor = clamp(m.logCursor, len(lines))
+	// The selected range is worked out up front, against the lines that are
+	// about to be drawn: m.logLines is rebuilt below, so it cannot be asked
+	// how long it is until that is done.
+	selFrom, selTo := -1, -2
+	if m.selAnchor >= 0 {
+		m.selAnchor = clamp(m.selAnchor, len(lines))
+		selFrom, selTo = min(m.selAnchor, m.logCursor), max(m.selAnchor, m.logCursor)
+	}
 	// Wrap each line at word boundaries, remembering where each starts;
-	// every row of the cursor line is highlighted.
+	// every row of the cursor line, and of a selected one, is highlighted.
 	m.logLines, m.logStarts = m.logLines[:0], m.logStarts[:0]
 	var display []string
 	width := max(1, m.log.Width())
 	for i, l := range lines {
 		m.logLines = append(m.logLines, ansi.Strip(l))
 		m.logStarts = append(m.logStarts, len(display))
+		bg := ""
+		switch {
+		case i >= selFrom && i <= selTo:
+			bg = bgSelected
+		case i == m.logCursor:
+			bg = cursorBg(m.focus == paneLog)
+		}
 		for _, seg := range strings.Split(ansi.Wrap(l, width, ""), "\n") {
-			if i == m.logCursor {
-				seg = highlight(seg, width, m.focus == paneLog)
+			if bg != "" {
+				seg = highlight(seg, width, bg)
 			}
 			display = append(display, seg)
 		}
@@ -396,15 +411,18 @@ func buildErrors(log []string) []string {
 	return out
 }
 
-// highlight paints the cursor line's background across the full width,
-// brighter in the focused pane. Styled text resets the attributes after
-// each coloured span, so the background is re-applied after every reset to
-// keep the whole row lit while the colours stay.
-func highlight(line string, width int, focused bool) string {
-	bg := bgUnfocused
+// cursorBg is the cursor line's background, brighter in the focused pane.
+func cursorBg(focused bool) string {
 	if focused {
-		bg = bgFocused
+		return bgFocused
 	}
+	return bgUnfocused
+}
+
+// highlight paints bg across the full width of a line. Styled text resets
+// the attributes after each coloured span, so the background is re-applied
+// after every reset to keep the whole row lit while the colours stay.
+func highlight(line string, width int, bg string) string {
 	s := fit(line, width)
 	s = strings.ReplaceAll(s, "\x1b[0m", "\x1b[0m"+bg)
 	s = strings.ReplaceAll(s, "\x1b[m", "\x1b[m"+bg)
@@ -478,9 +496,9 @@ func (m *Model) renderNode(n *tree.Node, guide string) string {
 	}
 	switch {
 	case status == tree.StatusFailed && n.IsLeaf():
-		name = styleFailed.Render(name)
+		name = inTree(styleFailed).Render(name)
 	case status == tree.StatusSkipped && n.IsLeaf():
-		name = styleDim.Render(name) + " " + styleSkipped.Render("[skipped]")
+		name = styleDim.Render(name) + " " + inTree(styleSkipped).Render("[skipped]")
 	case status == tree.StatusQueued:
 		// Everything waiting for its run is greyed out, name included; the
 		// root and the projects keep their weight so the tree still has
@@ -490,7 +508,7 @@ func (m *Model) renderNode(n *tree.Node, guide string) string {
 		name = styleBold.Render(name)
 	}
 	if d := n.Duration(); n.Kind != tree.KindRoot && (d > 0 || (n.IsLeaf() && n.Result != nil && status != tree.StatusSkipped)) {
-		tail = append(tail, renderDuration(d))
+		tail = append(tail, treeDuration(d))
 	}
 	line := "  " + guide + m.treeIcon(n) + " " + name
 	if len(tail) > 0 {
@@ -516,20 +534,23 @@ func plural(n int, thing string) string {
 	return fmt.Sprintf("%d %ss", n, thing)
 }
 
-// renderCounts is vitest's "(4 tests | 1 failed | 1 skipped)".
+// renderCounts is vitest's "(4 tests | 1 failed | 1 skipped)". How many
+// there are is grey, being a fact about the tree rather than a result, and
+// the outcomes are a shade back from the footer's, which is the line meant
+// to be read at a glance.
 func (m *Model) renderCounts(c tree.Counts) string {
-	parts := []string{testCount(c.Total)}
+	parts := []string{styleDim.Render(testCount(c.Total))}
 	if c.Running > 0 {
-		parts = append(parts, styleRunning.Render(fmt.Sprintf("%d running", c.Running)))
+		parts = append(parts, inTree(styleRunning).Render(fmt.Sprintf("%d running", c.Running)))
 	}
 	if c.Queued > 0 {
 		parts = append(parts, styleQueued.Render(fmt.Sprintf("%d queued", c.Queued)))
 	}
 	if c.Failed > 0 {
-		parts = append(parts, styleFailed.Bold(true).Render(fmt.Sprintf("%d failed", c.Failed)))
+		parts = append(parts, inTree(styleFailed).Render(fmt.Sprintf("%d failed", c.Failed)))
 	}
 	if c.Skipped > 0 {
-		parts = append(parts, styleSkipped.Render(fmt.Sprintf("%d skipped", c.Skipped)))
+		parts = append(parts, inTree(styleSkipped).Render(fmt.Sprintf("%d skipped", c.Skipped)))
 	}
 	sep := styleDim.Render(" | ")
 	return styleDim.Render("(") + strings.Join(parts, sep) + styleDim.Render(")")
@@ -547,22 +568,32 @@ func (m *Model) treeIcon(n *tree.Node) string {
 			return m.spin.View()
 		}
 		if n.IsLeaf() {
-			return styleRunning.Render(iconNone)
+			return inTree(styleRunning).Render(iconNone)
 		}
-		return styleRunning.Render(m.arrow(n))
+		return inTree(styleRunning).Render(m.arrow(n))
 	}
 	if n.IsLeaf() {
-		return statusIcon(status)
+		switch status {
+		case tree.StatusQueued:
+			return styleQueued.Render(iconQueued)
+		case tree.StatusPassed:
+			return inTree(stylePassed).Render(iconPassed)
+		case tree.StatusFailed:
+			return inTree(styleFailed).Render(iconFailed)
+		case tree.StatusSkipped:
+			return inTree(styleSkipped).Render(iconSkipped)
+		}
+		return styleDim.Render(iconNone)
 	}
 	switch status {
 	case tree.StatusQueued:
 		return styleQueued.Render(m.arrow(n))
 	case tree.StatusPassed:
-		return stylePassed.Render(m.arrow(n))
+		return inTree(stylePassed).Render(m.arrow(n))
 	case tree.StatusFailed:
-		return styleFailed.Bold(true).Render(m.arrow(n))
+		return inTree(styleFailed).Render(m.arrow(n))
 	case tree.StatusSkipped:
-		return styleSkipped.Render(m.arrow(n))
+		return inTree(styleSkipped).Render(m.arrow(n))
 	}
 	return styleDim.Render(m.arrow(n))
 }
@@ -702,6 +733,8 @@ var helpRows = []helpRow{
 	{"j / k", "to move through the tree, or the lines of the log"},
 	{"gg / G", "to jump to the top / bottom"},
 	{"ctrl+d / ctrl+u", "to move half a page (ctrl+e / ctrl+y scroll the log without moving)"},
+	{"V then y", "to select lines of the log and copy them; the mouse selects too"},
+	{"y", "to copy the log line under the cursor"},
 	{"l / h", "to expand / collapse a project, class or theory"},
 	{"L / H", "to expand / collapse the whole tree"},
 	{"enter or r", "to run the selected project, class or test"},
@@ -818,13 +851,26 @@ func colorMessage(line string) string {
 // worth a second look, so its time is drawn in the warning colour.
 const slowDuration = 300 * time.Millisecond
 
+// inTree is a style as the tree wears it: the same colour a shade back, so
+// the tree stays the quiet half of the screen and the footer's colours,
+// which are the ones meant to be read at a glance, carry.
+func inTree(s lipgloss.Style) lipgloss.Style { return s.Faint(true) }
+
 // renderDuration colours a time as vitest does: green while it is quick,
 // yellow once it passes the slow threshold, with the unit a faded shade of
 // that same colour so the number reads first.
-func renderDuration(d time.Duration) string {
+func renderDuration(d time.Duration) string { return duration(d, false) }
+
+// treeDuration is the same, a shade back for the tree.
+func treeDuration(d time.Duration) string { return duration(d, true) }
+
+func duration(d time.Duration, faint bool) string {
 	style := styleQuick
 	if d > slowDuration {
 		style = styleSlow
+	}
+	if faint {
+		style = inTree(style)
 	}
 	s := formatDuration(d)
 	// The plain forms (0.032s, 1.5s, 35s) end in their unit, which is faded;

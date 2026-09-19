@@ -28,9 +28,7 @@ Actual:   428
   │  │  ├─ × OverLimit_Returns429 0.001s
   │  │  └─ ✓ UnderLimit_Passes 0.001s
   │  └─ ▸ Middleware.AuthMiddlewareTests (5 tests) 0.004s
-  └─ ▾ Shop.Core.Tests (33 tests | 1 skipped) 1.2s
-     ├─ ▸ Inventory.StockTests (8 tests) 0.201s
-     └─ ▸ Pricing.MoneyTests (12 tests) 0.400s
+  └─ ▸ Shop.Core.Tests (33 tests | 1 skipped) 1.2s
  Ran 49 tests in 2.3s at 21:36:37  ·  1 failed | 46 passed | 2 skipped                             press ? for help
 ```
 
@@ -49,7 +47,12 @@ ctrl+j/k for their own pane movement.
   `j`/`k`, `gg`/`G` and `ctrl+d`/`ctrl+u` move a cursor line through it (the
   title shows its position, `12/80`), and `ctrl+e`/`ctrl+y` scroll without
   moving it. `v` swaps in the raw `dotnet` output of the selected project,
-  coloured by kind.
+  coloured by kind. `V` starts a linewise selection that the motions extend
+  and `y` copies, `esc` drops it, and dragging the mouse over the log
+  selects and copies in one go; `y` with nothing selected takes the cursor's
+  line. Copying goes out as an OSC 52 escape, so it reaches the clipboard of
+  the machine running the terminal even across `ssh`, provided the terminal
+  allows it.
 - **Tests** (bottom) is the tree of projects, classes, methods and theory
   rows under a root that stands for the solution itself, drawn with branch
   lines (`├─`, `└─`, `│`) so the nesting reads at a glance, with
@@ -63,11 +66,14 @@ ctrl+j/k for their own pane movement.
   and keeps that one shape from the first to the last, so the line settles
   rather than changing form when the batch ends, and an outcome still at
   zero is greyed rather than missing. The clock time stays grey; how long
-  the tests took gets a quiet cyan. What the solution holds is not down
-  there; the root carries it. What dtest is doing, and anything it has to
-  say, takes that line while there is something to say, and the summary
-  comes back after. So running one class reports that class. After a run,
-  passing classes fold to one line and failing ones open.
+  the batch has been going gets a quiet cyan, and it ticks rather than
+  waiting on results. What the solution holds is not down there; the root
+  carries it. What dtest is doing, and anything it has to say, takes that
+  line while there is something to say, and the summary comes back after. So
+  running one class reports that class. Projects start collapsed, so a fresh
+  tree is a list of them. After a run, passing classes fold to one line and
+  failing ones open, and a project is only ever opened by that, never folded
+  shut under you.
 
 ## Features
 
@@ -122,6 +128,8 @@ Press `?` in the app for this list.
 | `gg` / `G` | Top / bottom |
 | `ctrl+d` / `ctrl+u` | Half page |
 | `ctrl+e` / `ctrl+y` | Scroll the log without moving its cursor |
+| `V` then `y` | Select lines of the log with the motions above and copy them; `esc` drops the selection |
+| `y` | Copy the log line under the cursor |
 | `l` / `h` | Expand / collapse a project, class or theory (`h` on a collapsed node selects its parent) |
 | `L` / `H` | Expand / collapse the whole tree |
 | `space` | Toggle a fold |
@@ -147,9 +155,14 @@ a test that was not listed (added since the last reload) still appears.
 Durations are `0.032s` below a second, `1.5s` below ten, `35s` below a
 minute, then `2m34s`. They are coloured as vitest colours them: green up to
 300ms, yellow beyond it, so slow tests stand out, with the unit in a faded
-shade of the number's own colour. A group shows the sum of its tests' times,
-and so does the summary row, over the last batch of runs. Neither counts the
-time spent outside the tests themselves.
+shade of the number's own colour. A group shows the sum of its tests' times.
+The footer's timer is different: it is the wall clock over the batch, so it
+keeps moving through a slow test instead of sitting still until the next
+result lands. The three outcome colours are washed shades rather than the
+terminal's own red, green and yellow, which are meant to shout and would, on
+a screen that is mostly results. In the tree they are drawn a shade back
+again, and how many tests a row holds is grey, so the footer is the line
+that carries.
 
 ## Neovim
 
