@@ -168,7 +168,7 @@ func (m *Model) handleCommonKey(key string) (tea.Model, tea.Cmd) {
 			return m, m.enqueue([]*tree.Node{n})
 		}
 	case "A":
-		return m, m.enqueue(m.tree.Projects)
+		return m, m.enqueue([]*tree.Node{m.tree.Root}) // the solution, in one run
 	case "a":
 		m.query = ""
 		m.statusFilter = tree.StatusNone

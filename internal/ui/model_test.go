@@ -74,9 +74,11 @@ func markedLines(m *Model) []string {
 	return out
 }
 
-// statRow is a row of the summary block as it appears in the stripped view,
-// so the tests do not hard-code the width of the label column.
-func statRow(label, value string) string { return ansi.Strip(summaryLabel(label)) + value }
+// statsRow is the one-row summary above the tree, as plain text.
+func statsRow(m *Model) string { return strings.TrimRight(ansi.Strip(m.statsLine()), " ") }
+
+// statusRow is the status line along the bottom of the screen.
+func statusRow(m *Model) string { return strings.TrimRight(ansi.Strip(m.renderStatus()), " ") }
 
 func containsAll(t *testing.T, v string, wants ...string) {
 	t.Helper()
@@ -94,67 +96,53 @@ func TestLayoutAndNavigation(t *testing.T) {
 		t.Fatalf("rows = %d", len(m.rows))
 	}
 	v := view(m)
-	containsAll(t, v, "DTEST  Sample  v1.2.3", "⎯⎯ Log  All Tests ⎯", "⎯⎯ Tests ⎯", "▾ All Tests (5 tests)", "▾ Alpha.Tests (5 tests)", "▸ MathTests (4 tests)", "5 not run (5)", "Not run yet",
-		statRow("Test Projects", "(1)"), statRow("Tests", "0"), statRow("Failed", "0"),
-		statRow("Skipped", "0"), statRow("Passed", "0"), statRow("Start at", "–"), statRow("Duration", "–"),
-		"press ? to show help, press q to quit")
+	containsAll(t, v, "DTEST  Sample  v1.2.3", "⎯⎯ Log  Sample ⎯", "⎯⎯ Tests ⎯", "▾ Sample (5 tests)", "▾ Alpha.Tests (5 tests)", "▸ MathTests (4 tests)", "Not run yet",
+		"Projects (1)", "nothing run yet", "press ? for help")
 	if strings.Contains(v, "Summary") || strings.Contains(v, "│") || strings.Contains(v, "Ready") || strings.Count(v, "DTEST") != 1 {
 		t.Errorf("one bottom pane and no extra text before the first run:\n%s", v)
-	}
-	// The summary block sits flush with the right edge of the bottom pane,
-	// its widest line ending at the last column.
-	for _, l := range strings.Split(v, "\n") {
-		if strings.Contains(l, "press ? to show help") && !strings.HasSuffix(l, "press q to quit") {
-			t.Errorf("hint should end at the right edge: %q", l)
-		}
 	}
 	if strings.Contains(v, "(5 tests) 0.000s") {
 		t.Error("unrun groups show no duration")
 	}
-	// The summary block is bottom-aligned: the hint is the last line.
-	lines := strings.Split(strings.TrimRight(v, "\n"), "\n")
-	if last := lines[len(lines)-1]; !strings.HasSuffix(last, "press q to quit") {
-		t.Errorf("last line should be the hint, got %q", last)
-	}
-	// The state line sits above the block, so the block keeps its place
-	// when a run starts: the Tests line stays on the same screen row.
-	row := func() int {
-		for i, l := range strings.Split(view(m), "\n") {
-			if strings.Contains(l, statRow("Tests", "")) && !strings.Contains(l, "⎯") {
-				return i
-			}
+	// The summary is one row, directly under the tree pane's title and above
+	// the root, with the hint at the right edge.
+	lines := strings.Split(v, "\n")
+	title := 0
+	for i, l := range lines {
+		if strings.HasPrefix(l, rule+rule+" Tests") {
+			title = i
 		}
-		return -1
 	}
-	before := row()
-	col := func() int {
-		for _, l := range strings.Split(view(m), "\n") {
-			if i := strings.Index(l, "Tests  ("); i >= 0 {
-				return i
-			}
-		}
-		return -1
+	if got := strings.TrimRight(lines[title+1], " "); got != statsRow(m) || !strings.HasSuffix(got, "press ? for help") {
+		t.Errorf("summary row = %q", got)
 	}
-	beforeCol := col()
+	if !strings.Contains(lines[title+2], "▾ Sample") {
+		t.Errorf("the root should follow it, got %q", lines[title+2])
+	}
+	// What dtest is doing goes on the last line of the screen, leaving the
+	// summary row alone.
 	m.building = true
 	m.refresh()
-	if after := row(); after != before || col() != beforeCol || !strings.Contains(view(m), "Building Sample.slnx…") {
-		t.Errorf("Tests line moved from row %d/col %d to row %d/col %d when building started", before, beforeCol, after, col())
+	if got := statusRow(m); !strings.Contains(got, "Building Sample.slnx…") {
+		t.Errorf("status line = %q", got)
+	}
+	if got := statsRow(m); !strings.Contains(got, "Projects") {
+		t.Errorf("the summary row should keep the summary: %q", got)
+	}
+	if last := lines[len(lines)-1]; strings.TrimRight(last, " ") != "" {
+		t.Errorf("the status line is blank when there is nothing to say: %q", last)
 	}
 	m.building = false
 	m.refresh()
-	// The log pane is about 70% of the height: header + title + log + title + bottom = 40.
+	// The log pane is about 70% of what is left: header + title + log +
+	// title + summary + tree + status = 40, both panes the full width.
 	g := m.layout()
-	if g.logH < 24 || g.logH > 27 || g.bottomH+g.logH+headerH+2*titleH != 40 || g.statsW == 0 || g.treeW+g.statsW+2 != 140 || g.treeW*100 < 140*minTreeShare {
+	if g.logH < 23 || g.logH > 27 || g.treeH+g.logH+headerH+2*titleH+statsH+statusH != 40 {
 		t.Fatalf("geometry = %+v", g)
 	}
-	// The stats show only while the tree keeps 65% of the width: at 110
-	// columns the tree would have 110-39 = 71 (64%), so they hide.
-	m.Update(tea.WindowSizeMsg{Width: 110, Height: 40})
-	if g := m.layout(); g.statsW != 0 || g.treeW != 110 || strings.Contains(view(m), "press ? to show help") {
-		t.Fatalf("110-column geometry = %+v", g)
+	if m.treeView.Width() != 140 || m.log.Width() != 140 {
+		t.Fatalf("widths = %d %d", m.treeView.Width(), m.log.Width())
 	}
-	m.Update(tea.WindowSizeMsg{Width: 140, Height: 40})
 
 	press(m, "j", "j", "l") // expand MathTests
 	if len(m.rows) != 7 || m.current().Name != "MathTests" {
@@ -197,15 +185,17 @@ func TestLayoutAndNavigation(t *testing.T) {
 		t.Fatalf("h on a collapsed node selects its parent, got %q", m.current().Name)
 	}
 	press(m, "ctrl+d")
-	if m.cursor == 1 {
-		t.Fatal("ctrl+d should move")
+	down := m.cursor
+	if down <= 2 {
+		t.Fatalf("ctrl+d should move down from MathTests, cursor = %d", down)
 	}
 	press(m, "ctrl+u")
-	if m.cursor != 0 {
-		t.Fatalf("ctrl+u -> %d", m.cursor)
+	if m.cursor >= down {
+		t.Fatalf("ctrl+u should move back up, %d -> %d", down, m.cursor)
 	}
+	press(m, "g", "g")
 	// One highlighted row in the log (dim, unfocused), one in the tree.
-	if marked := markedLines(m); len(marked) != 2 || !strings.Contains(marked[1], "All Tests (5 tests)") {
+	if marked := markedLines(m); len(marked) != 2 || !strings.Contains(marked[1], "Sample (5 tests)") {
 		t.Fatalf("markers = %v", marked)
 	}
 	if !strings.Contains(m.View().Content, bgUnfocused) || !strings.Contains(m.View().Content, bgFocused) {
@@ -213,30 +203,18 @@ func TestLayoutAndNavigation(t *testing.T) {
 	}
 }
 
-func TestFitStats(t *testing.T) {
-	head := []string{"state", "projects", "total"}
-	rows := []string{"a", "b", "c", "", "hint"}
-	// The head stays on top and the rows hang from the bottom.
-	if got := fitStats(head, rows, 9); strings.Join(got, "|") != "state|projects|total||a|b|c||hint" {
-		t.Errorf("padded = %q", got)
-	}
-	if got := fitStats(head, rows, 7); strings.Join(got, "|") != "state|projects|total|a|b|c|hint" {
-		t.Errorf("compacted = %q", got)
-	}
-	if got := fitStats(head, rows, 5); strings.Join(got, "|") != "state|projects|total|a|hint" {
-		t.Errorf("cut = %q", got)
-	}
-	// Too short even for the head: what fits is the top of it.
-	if got := fitStats(head, rows, 2); strings.Join(got, "|") != "state|projects" {
-		t.Errorf("squeezed = %q", got)
-	}
-	// On a short terminal the state line still shows.
+func TestShortTerminal(t *testing.T) {
+	// With little height the summary row still shows, above whatever the
+	// tree has room for.
 	m := newTestModel(t)
-	m.Update(tea.WindowSizeMsg{Width: 150, Height: 24})
+	m.Update(tea.WindowSizeMsg{Width: 150, Height: 12})
 	m.building = true
 	m.refresh()
-	if v := view(m); !strings.Contains(v, "Building Sample.slnx…") || !strings.Contains(v, "press q to quit") {
-		t.Fatalf("short terminal should keep the state line and hint:\n%s", v)
+	if g := m.layout(); g.treeH < 1 || g.logH < 1 {
+		t.Fatalf("geometry = %+v", g)
+	}
+	if v := view(m); !strings.Contains(v, "Building Sample.slnx…") || !strings.Contains(v, "press ? for help") {
+		t.Fatalf("short terminal should keep the summary row:\n%s", v)
 	}
 }
 
@@ -408,12 +386,20 @@ func TestRunFlow(t *testing.T) {
 		t.Fatalf("class should be running: %+v", class.Counts())
 	}
 	v := view(m)
-	containsAll(t, v, "(5 tests | 4 running)", "19:10:48", statRow("Tests", "4"), statRow("Failed", "0"), statRow("Passed", "0"))
-	// Only the project row spins; the running class beneath keeps its arrow.
-	_, bottom, _ := strings.Cut(v, "⎯⎯ Tests")
+	containsAll(t, v, "(5 tests | 4 running)")
+	if got := statsRow(m); strings.Contains(got, "Ran ") || strings.Contains(got, "·") {
+		t.Errorf("a run in flight reports nothing but the projects: %q", got)
+	}
+	// Only the project row spins; the running class beneath keeps its arrow,
+	// and nothing in the log spins at all.
+	const dots = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+	top, bottom, _ := strings.Cut(v, "⎯⎯ Tests")
+	if strings.ContainsAny(top, dots) {
+		t.Errorf("the log should hold still while tests run:\n%s", top)
+	}
 	spinners := 0
 	for _, l := range strings.Split(bottom, "\n") {
-		if strings.ContainsAny(l, "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏") {
+		if strings.ContainsAny(l, dots) {
 			spinners++
 			if !strings.Contains(l, "Alpha.Tests (5 tests") {
 				t.Errorf("only the project row should spin: %q", l)
@@ -426,12 +412,7 @@ func TestRunFlow(t *testing.T) {
 	if strings.Contains(v, "RUN") || strings.Contains(v, "Running") {
 		t.Errorf("no RUN badge or Running text anywhere while tests run:\n%s", v)
 	}
-	head, rows := m.statsLines()
-	for _, l := range append(head, rows...) {
-		if strings.Contains(ansi.Strip(l), "running") {
-			t.Errorf("the summary should not say running while tests run: %q", ansi.Strip(l))
-		}
-	}
+
 	f.emit(dotnet.LineEvent{Text: "  Starting: Alpha.Tests"})
 	f.emit(dotnet.ResultEvent{Result: dotnet.Result{Name: "Alpha.Tests.MathTests.Adds", Outcome: dotnet.OutcomePassed, Duration: 32 * time.Millisecond}})
 	for i := 0; i < 2; i++ {
@@ -472,12 +453,9 @@ func TestRunFlow(t *testing.T) {
 		"▾ MathTests (5 tests | 1 failed | 1 skipped)",
 		"× Fails 0.001s",
 		"▸ Theory (2 tests | 1 skipped)",
-		statRow("Test Projects", "(1)"), // failures live in the run summary, not here
-		statRow("Tests", "5"),
-		statRow("Failed", "1"),
-		statRow("Skipped", "1"),
-		statRow("Passed", "3"),
-		statRow("Duration", "0.033s"), // the tests' own time, not the wall clock
+		// The projects part leaves failures out; the outcomes report them,
+		// and the time is the tests' own, not the wall clock.
+		"Projects (1)  ·  Ran 5 tests in 0.033s at 19:10:48  ·  1 failed | 3 passed | 1 skipped",
 	)
 	if strings.Contains(v, "Tests failed.") || strings.Contains(v, "Tests passed.") {
 		t.Error("no result line in the stats")
@@ -488,12 +466,13 @@ func TestRunFlow(t *testing.T) {
 	if strings.Contains(v, "Stack trace") {
 		t.Error("a group's log leaves the stack traces out")
 	}
-	// The line under the section header is its tally.
+	// The section header is followed straight by its failures: the tally is
+	// on the tree row the section was selected from, not repeated here.
 	vlines := strings.Split(v, "\n")
 	for i, l := range vlines {
 		if strings.Contains(l, "× Alpha.Tests › MathTests 0.033s") {
-			if !strings.Contains(vlines[i+1], "1 failed | 3 passed | 1 skipped (5)") {
-				t.Errorf("tally line = %q", vlines[i+1])
+			if strings.Contains(vlines[i+1], "passed") || !strings.Contains(vlines[i+2], "FAIL") {
+				t.Errorf("after the header: %q then %q", vlines[i+1], vlines[i+2])
 			}
 		}
 	}
@@ -669,10 +648,10 @@ func TestOpenInEditor(t *testing.T) {
 	if !strings.Contains(m.status, "Sent UnitTest1.cs:7") {
 		t.Fatalf("status = %q", m.status)
 	}
-	// The root spans every project, so it has no one file to open.
+	// The root is the solution, so it opens the solution file.
 	press(m, "g", "g", "o")
-	if n := len(opened); n != 2 || !strings.Contains(m.status, "No source location for All Tests") {
-		t.Fatalf("root open = %v status = %q", opened, m.status)
+	if opened[len(opened)-1] != "/src/Sample.slnx" {
+		t.Fatalf("root open = %v", opened)
 	}
 	press(m, "j", "o") // the project opens its own file
 	if opened[len(opened)-1] != projA {
@@ -835,17 +814,19 @@ func TestSummaryCountsLastRun(t *testing.T) {
 		pass("Alpha.Tests.MathTests.Theory(n: 1)"), pass("Alpha.Tests.MathTests.Theory(n: 2)"),
 		pass("Alpha.Tests.SlowTests.Waits"))
 	// Four of the five took a millisecond each; the failure took none.
-	containsAll(t, view(m), statRow("Tests", "5"), statRow("Failed", "1"), statRow("Passed", "4"),
-		statRow("Duration", "0.004s"))
+	if got := statsRow(m); !strings.Contains(got, "Ran 5 tests in 0.004s") || !strings.Contains(got, "1 failed | 4 passed") {
+		t.Errorf("after running everything: %q", got)
+	}
 
 	// Then just SlowTests, which passes. The failure elsewhere is still in
 	// the tree, but this run had none of it.
 	press(m, "G", "r")
 	finishRun(t, m, f, pass("Alpha.Tests.SlowTests.Waits"))
 	v := view(m)
-	// Duration is this run's tests, not every test that has ever run.
-	containsAll(t, v, statRow("Tests", "1"), statRow("Failed", "0"), statRow("Passed", "1"),
-		statRow("Duration", "0.001s"))
+	// The counts and the time are this run's, not every test that has run.
+	if got := statsRow(m); !strings.Contains(got, "Ran 1 test in 0.001s") || !strings.Contains(got, "1 passed") {
+		t.Errorf("after running one class: %q", got)
+	}
 	if !strings.Contains(v, "× Fails") {
 		t.Error("the earlier failure should still be in the tree")
 	}
@@ -854,34 +835,47 @@ func TestSummaryCountsLastRun(t *testing.T) {
 	}
 }
 
-// The state line and the project tally stay at the top of the pane; the run
-// summary stays at the bottom of it.
-func TestStatsHeadPinnedToTop(t *testing.T) {
+// What dtest is doing, and anything it has to say, goes on the last line of
+// the screen and nowhere else.
+func TestStatusLineAtTheBottom(t *testing.T) {
 	m := newTestModel(t)
+	last := func() string {
+		lines := strings.Split(view(m), "\n")
+		return strings.TrimRight(lines[len(lines)-1], " ")
+	}
+	if last() != "" || statusRow(m) != "" {
+		t.Errorf("idle status line = %q", last())
+	}
 	m.building = true
 	m.refresh()
-	lines := strings.Split(view(m), "\n")
-	var title, state, projects, hint int
-	for i, l := range lines {
-		switch {
-		case strings.Contains(l, "⎯⎯ Tests"):
-			title = i
-		case strings.Contains(l, "Building Sample.slnx…"):
-			state = i
-		case strings.Contains(l, statRow("Test Projects", "")):
-			projects = i
-		case strings.Contains(l, "press q to quit"):
-			hint = i
-		}
+	if !strings.Contains(last(), "Building Sample.slnx…") {
+		t.Errorf("building = %q", last())
 	}
-	if state != title+1 || projects != state+1 {
-		t.Errorf("head should be state then projects from the top of the pane: %d %d %d", title, state, projects)
+	m.building = false
+	m.loading = 1
+	m.refresh()
+	if !strings.Contains(last(), "Listing tests…") {
+		t.Errorf("listing = %q", last())
 	}
-	if strings.Contains(view(m), "Total tests") {
-		t.Error("the total belongs to the root of the tree now, not the summary")
+	m.loading = 0
+	m.status, m.statusErr = "No failed tests to re-run", false
+	m.refresh()
+	if got := last(); !strings.Contains(got, "INFO") || !strings.Contains(got, "No failed tests to re-run") {
+		t.Errorf("status = %q", got)
 	}
-	if hint != len(lines)-1 {
-		t.Errorf("the hint should be the last line, got %d of %d", hint, len(lines))
+	m.statusErr = true
+	m.refresh()
+	if !strings.Contains(last(), "FAIL") {
+		t.Errorf("an error carries the FAIL badge: %q", last())
+	}
+	// It never crowds the summary row above the tree.
+	if strings.Contains(statsRow(m), "No failed tests to re-run") {
+		t.Errorf("summary row = %q", statsRow(m))
+	}
+	m.status = ""
+	m.refresh()
+	if last() != "" {
+		t.Errorf("the line clears again: %q", last())
 	}
 }
 
@@ -892,7 +886,7 @@ func TestTreeGuides(t *testing.T) {
 	m := newTestModel(t)
 	press(m, "j", "j", "l", "j", "j", "j", "space") // expand MathTests, then Theory
 	want := []string{
-		"▾ All Tests (5 tests)",
+		"▾ Sample (5 tests)",
 		"└─ ▾ Alpha.Tests (5 tests)",
 		"   ├─ ▾ MathTests (4 tests)",
 		"   │  ├─ · Adds",
@@ -913,7 +907,7 @@ func TestTreeGuides(t *testing.T) {
 	}
 	// Filtering hides rows, and the guides join up the ones that are left.
 	press(m, "/", "W", "a", "i", "enter")
-	wantFiltered := []string{"▾ All Tests (5 tests)", "└─ ▾ Alpha.Tests (5 tests)", "   └─ ▾ SlowTests (1 test)", "      └─ · Waits"}
+	wantFiltered := []string{"▾ Sample (5 tests)", "└─ ▾ Alpha.Tests (5 tests)", "   └─ ▾ SlowTests (1 test)", "      └─ · Waits"}
 	if got := treeRows(m); strings.Join(got, "|") != strings.Join(wantFiltered, "|") {
 		t.Errorf("filtered guides = %q", got)
 	}
@@ -930,7 +924,7 @@ func treeRows(m *Model) []string {
 		}
 	}
 	var out []string
-	for _, l := range lines[start:] {
+	for _, l := range lines[start+1:] { // the row after the title is the summary
 		if l = strings.TrimRight(ansi.Truncate(l, m.treeView.Width(), ""), " "); l != "" {
 			out = append(out, strings.TrimPrefix(l, "  "))
 		}
@@ -946,12 +940,15 @@ func TestQueuedIsGrey(t *testing.T) {
 	m := newTestModel(t)
 	p := m.tree.AddProject("/src/Beta.Tests/Beta.Tests.csproj")
 	m.tree.SetTests(p, []string{"Beta.Tests.ApiTests.Pings"})
-	press(m, "A") // the first project runs, the second one queues
+	// Run the first project, then ask for the second while that is going:
+	// the second one's tests wait their turn.
+	press(m, "g", "g", "j", "r")
 	<-f.started
-	press(m, "G", "l", "l")
+	press(m, "j", "j", "j", "r")
 	if p.Status() != tree.StatusQueued {
 		t.Fatalf("the second project should be queued, got %v", p.Status())
 	}
+	press(m, "l", "l") // open its class so its tests are on screen
 	want := map[string]string{
 		"Beta.Tests": styleQueued.Bold(true).Render("Beta.Tests"),
 		"ApiTests":   styleQueued.Render("ApiTests"),
@@ -985,7 +982,7 @@ func TestExpandAndCollapseAll(t *testing.T) {
 	m := newTestModel(t)
 	press(m, "L")
 	want := []string{
-		"▾ All Tests (5 tests)",
+		"▾ Sample (5 tests)",
 		"└─ ▾ Alpha.Tests (5 tests)",
 		"   ├─ ▾ MathTests (4 tests)",
 		"   │  ├─ · Adds",
@@ -1006,7 +1003,7 @@ func TestExpandAndCollapseAll(t *testing.T) {
 		t.Fatalf("G -> %q", m.current().Name)
 	}
 	press(m, "H")
-	if got := treeRows(m); len(got) != 1 || got[0] != "▸ All Tests (5 tests)" {
+	if got := treeRows(m); len(got) != 1 || got[0] != "▸ Sample (5 tests)" {
 		t.Errorf("after H: %q", got)
 	}
 	if m.cursor != 0 || m.current().Kind != tree.KindRoot {
@@ -1021,8 +1018,9 @@ func TestExpandAndCollapseAll(t *testing.T) {
 	}
 }
 
-// The root gathers every project: it rolls up their counts, running it runs
-// each of them, and its log lists every failure in the solution.
+// The root is the solution: it rolls up every project, running it is one
+// `dotnet test` over the whole thing, and each result is filed under the
+// project that listed that test.
 func TestRootNode(t *testing.T) {
 	f := stubRun(t)
 	m := newTestModel(t)
@@ -1030,44 +1028,117 @@ func TestRootNode(t *testing.T) {
 	m.tree.SetTests(beta, []string{"Beta.Tests.ApiTests.Pings"})
 	m.refresh()
 	root := m.rows[0]
-	if root.Kind != tree.KindRoot || root.Name != tree.RootName || root.Counts().Total != 6 {
-		t.Fatalf("root = %q %+v", root.Name, root.Counts())
+	if root.Kind != tree.KindRoot || root.Name != "Sample" || root.Path != "/src/Sample.slnx" || root.Counts().Total != 6 {
+		t.Fatalf("root = %q %q %+v", root.Name, root.Path, root.Counts())
 	}
-	// enter on the root queues a run for every project, in order.
 	press(m, "g", "g", "enter")
 	<-f.started
-	if f.project != projA || f.filter != "" {
-		t.Fatalf("first run = %q %q", f.project, f.filter)
+	if f.project != "/src/Sample.slnx" || f.filter != "" {
+		t.Fatalf("run = %q %q", f.project, f.filter)
 	}
-	if len(m.queue) != 1 || m.queue[0].project != beta {
-		t.Fatalf("the second project should be queued, got %d", len(m.queue))
+	if len(m.queue) != 0 {
+		t.Fatalf("the solution runs in one go, but %d more were queued", len(m.queue))
 	}
 	f.emit(dotnet.DoneEvent{Results: []dotnet.Result{
 		{Name: "Alpha.Tests.MathTests.Fails", Outcome: dotnet.OutcomeFailed, Message: "alpha boom"},
-	}})
-	m.Update(<-m.runEvents())
-	<-f.started
-	f.emit(dotnet.DoneEvent{Results: []dotnet.Result{
 		{Name: "Beta.Tests.ApiTests.Pings", Outcome: dotnet.OutcomeFailed, Message: "beta boom"},
+		{Name: "Beta.Tests.ApiTests.Added", Outcome: dotnet.OutcomePassed},
 	}})
 	m.Update(<-m.runEvents())
-
-	// Back on the root, its log reports both failures, from both projects.
+	for _, c := range []struct {
+		project *tree.Node
+		name    string
+	}{
+		{m.tree.Projects[0], "Alpha.Tests.MathTests.Fails"},
+		{beta, "Beta.Tests.ApiTests.Pings"},
+		{beta, "Beta.Tests.ApiTests.Added"}, // never listed, placed by its name
+	} {
+		if l := m.tree.Lookup(c.project, c.name); l == nil || l.Result == nil {
+			t.Errorf("%s should have landed under %s", c.name, c.project.Name)
+		}
+	}
+	// Back on the root, its log reports the failures from both projects.
 	press(m, "g", "g")
 	v := view(m)
-	containsAll(t, v, "⎯⎯ Log  All Tests ⎯", "× All Tests",
+	containsAll(t, v, "⎯⎯ Log  Sample ⎯", "× Sample",
 		"FAIL  Alpha.Tests › MathTests › Fails", "alpha boom",
 		"FAIL  Beta.Tests › ApiTests › Pings", "beta boom")
-	if strings.Contains(v, "All Tests › Alpha") {
+	if strings.Contains(v, "Sample › Alpha") {
 		t.Error("the root should not pad the breadcrumbs beneath it")
 	}
 	// Its own row carries the total and nothing else: no tally of how the
 	// run went, and no time, both of which belong below it.
 	rows := treeRows(m)
-	if rows[0] != "▾ All Tests (6 tests)" {
+	if rows[0] != "▾ Sample (7 tests)" {
 		t.Errorf("root row = %q", rows[0])
 	}
 	if !strings.Contains(rows[1], "1 failed") {
 		t.Errorf("the project below it still reports its run: %q", rows[1])
+	}
+}
+
+// The log holds a node's time back until its tests have all reported, so a
+// running total never reads as a result.
+func TestLogDurationWaitsForTheRun(t *testing.T) {
+	f := stubRun(t)
+	m := newTestModel(t)
+	press(m, "j", "j", "r") // MathTests
+	<-f.started
+	// One of its four tests is in; the class itself is still going.
+	f.emit(dotnet.ResultEvent{Result: dotnet.Result{
+		Name: "Alpha.Tests.MathTests.Adds", Outcome: dotnet.OutcomePassed, Duration: 32 * time.Millisecond}})
+	m.Update(<-m.runEvents())
+	if got := m.logLines[0]; strings.Contains(got, "0.032s") || !strings.Contains(got, "MathTests") {
+		t.Errorf("mid-run header = %q", got)
+	}
+	// The finished test does show its own time, from its own row.
+	press(m, "l", "l")
+	if got := m.logLines[0]; !strings.Contains(got, "Adds") || !strings.Contains(got, "0.032s") {
+		t.Errorf("finished test header = %q", got)
+	}
+	// Once the run ends the class reports its total.
+	press(m, "h", "h")
+	f.emit(dotnet.DoneEvent{Results: []dotnet.Result{{
+		Name: "Alpha.Tests.MathTests.Adds", Outcome: dotnet.OutcomePassed, Duration: 32 * time.Millisecond}}})
+	m.Update(<-m.runEvents())
+	if got := m.logLines[0]; !strings.Contains(got, "MathTests") || !strings.Contains(got, "0.032s") {
+		t.Errorf("finished header = %q", got)
+	}
+}
+
+// The summary keeps its tally back until the batch is finished, and when it
+// arrives the clock time is grey while the time the tests took is cyan.
+func TestSummaryWaitsThenColours(t *testing.T) {
+	f := stubRun(t)
+	m := newTestModel(t)
+	clock := time.Date(2026, 9, 19, 21, 36, 37, 0, time.Local)
+	now = func() time.Time { return clock }
+	t.Cleanup(func() { now = time.Now })
+
+	press(m, "A")
+	<-f.started
+	// A result has landed, but the run is not over.
+	f.emit(dotnet.ResultEvent{Result: dotnet.Result{
+		Name: "Alpha.Tests.MathTests.Adds", Outcome: dotnet.OutcomePassed, Duration: 2300 * time.Millisecond}})
+	m.Update(<-m.runEvents())
+	if got := statsRow(m); strings.Contains(got, "Ran ") || strings.Contains(got, "passed") {
+		t.Errorf("mid-run summary = %q", got)
+	}
+	f.emit(dotnet.DoneEvent{Results: []dotnet.Result{{
+		Name: "Alpha.Tests.MathTests.Adds", Outcome: dotnet.OutcomePassed, Duration: 2300 * time.Millisecond}}})
+	m.Update(<-m.runEvents())
+
+	if got := statsRow(m); !strings.Contains(got, "Ran 1 test in 2.3s at 21:36:37") || !strings.Contains(got, "1 passed") {
+		t.Errorf("finished summary = %q", got)
+	}
+	line := m.statsLine()
+	if !strings.Contains(line, styleDim.Render(" at 21:36:37")) {
+		t.Errorf("the clock time should be grey: %q", ansi.Strip(line))
+	}
+	if !strings.Contains(line, styleElapsed.Render("2.3s")) {
+		t.Errorf("the elapsed time should be quiet cyan: %q", ansi.Strip(line))
+	}
+	if styleElapsed.Render("2.3s") == styleDim.Render("2.3s") {
+		t.Error("the two times should not look the same")
 	}
 }

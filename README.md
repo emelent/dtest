@@ -19,18 +19,20 @@ Actual:   428
 
 
 
-⎯⎯ Tests ⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
-  ▾ All Tests (49 tests)
-  ├─ ▾ Shop.Api.Tests (16 tests | 1 failed | 1 skipped) 1.1s               Test Projects   1 passed (2)
-  │  ├─ ▸ Controllers.OrdersControllerTests (3 tests) 0.305s               Tests           49
-  │  ├─ ▸ Integration.CheckoutFlowTests (2 tests | 1 skipped) 0.803s       Failed          1
-  │  ├─ ▾ Middleware.RateLimitMiddlewareTests (2 tests | 1 failed) 0.002s  Skipped         2
-  │  │  ├─ × OverLimit_Returns429 0.001s                                   Passed          46
-  │  │  └─ ✓ UnderLimit_Passes 0.001s                                      Start at        21:36:37
-  │  └─ ▸ Middleware.AuthMiddlewareTests (5 tests) 0.004s                  Duration        2.3s
+⎯⎯ Tests ⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
+ Projects 1 passed (2)  ·  Ran 49 tests in 2.3s at 21:36:37  ·  1 failed | 46 passed | 2 skipped   press ? for help
+  ▾ Shop (49 tests)
+  ├─ ▾ Shop.Api.Tests (16 tests | 1 failed | 1 skipped) 1.1s
+  │  ├─ ▸ Controllers.OrdersControllerTests (3 tests) 0.305s
+  │  ├─ ▸ Integration.CheckoutFlowTests (2 tests | 1 skipped) 0.803s
+  │  ├─ ▾ Middleware.RateLimitMiddlewareTests (2 tests | 1 failed) 0.002s
+  │  │  ├─ × OverLimit_Returns429 0.001s
+  │  │  └─ ✓ UnderLimit_Passes 0.001s
+  │  └─ ▸ Middleware.AuthMiddlewareTests (5 tests) 0.004s
   └─ ▾ Shop.Core.Tests (33 tests | 1 skipped) 1.2s
      ├─ ▸ Inventory.StockTests (8 tests) 0.201s
-     └─ ▸ Pricing.MoneyTests (12 tests) 0.400s                             press ? to show help, press q to quit
+     └─ ▸ Pricing.MoneyTests (12 tests) 0.400s
+  FAIL  Shop.Api.Tests: 1 test failed
 ```
 
 ## Layout
@@ -41,35 +43,39 @@ ctrl+j/k for their own pane movement.
 
 - **Log** (top, about 70% of the height) shows the results of whatever the
   tree selects. For a test: its verdict, message (expected values green,
-  actual values red), failing location, stack trace and captured output.
-  For a project, class or theory: its passed / failed / skipped tally and
-  every failure beneath it.
-  Build errors show first. Long lines wrap. With the log focused, `j`/`k`,
-  `gg`/`G` and `ctrl+d`/`ctrl+u` move a cursor line through it (the title
-  shows its position, `12/80`), and `ctrl+e`/`ctrl+y` scroll without moving
-  it. `v` swaps in the raw `dotnet` output of the selected project,
+  actual values red), failing location, stack trace and captured output. For
+  the solution, a project, a class or a theory: every failure beneath it,
+  without the tally, which the tree row it was selected from already
+  carries. Build errors show first. Long lines wrap. With the log focused,
+  `j`/`k`, `gg`/`G` and `ctrl+d`/`ctrl+u` move a cursor line through it (the
+  title shows its position, `12/80`), and `ctrl+e`/`ctrl+y` scroll without
+  moving it. `v` swaps in the raw `dotnet` output of the selected project,
   coloured by kind.
 - **Tests** (bottom) is the tree of projects, classes, methods and theory
-  rows under a single **All Tests** root, drawn with branch lines (`├─`,
-  `└─`, `│`) so the nesting reads at a glance, with vitest-style counts and
-  durations on every group, and the stats along its right-hand side, labels
-  down one edge and values in a column. The root's own row just says how
-  many tests there are; selecting it shows the whole solution at once, its
-  rolled-up tally and every failure under it, and running it runs every
-  project. The stats come in two halves. At the top of the pane sits what
-  dtest is doing (building, listing, or a status message) and how many test
-  projects the solution holds, failures left out since the run summary below
-  is where they go. The total number of tests is not repeated there: the
-  root of the tree carries it. Hanging from the bottom is the last batch of
-  runs: how many tests it covered, how many of those failed, were skipped
-  and passed, when it started and how long its tests took, then the key
-  hint. So running one class reports that class, and the totals above stay
-  put. The stats hide unless the tree keeps at least 65% of the width. After
-  a run, passing classes fold to one line and failing ones open.
+  rows under a root that stands for the solution itself, drawn with branch
+  lines (`├─`, `└─`, `│`) so the nesting reads at a glance, with
+  vitest-style counts and durations on every group. The root's own row just
+  says how many tests there are; selecting it shows the whole solution at
+  once, every failure under it, and running it runs `dotnet test` over the
+  solution in one go, filing each result under the project that listed that
+  test. One row above the tree carries the summary: the solution's test
+  projects and, once a batch of runs has finished, `Ran 49 tests in 2.3s at
+  21:36:37` and then how they turned out, with the key hint at the right
+  edge. While a batch is still going it reports nothing but the projects,
+  since a tally that grows as results land invites reading half a run as the
+  whole of it, and the tree is where progress belongs. The clock time stays
+  grey; how long the tests took gets a quiet cyan. Failures are left out of
+  the projects part, since the outcomes are where they go, and the number of
+  tests in the solution is not there either: the root carries it. What dtest
+  is doing, and anything it has to say, goes on the last line of the screen
+  instead, which is always there and blank the rest of the time so nothing
+  above it moves when a message arrives. So running one class reports that
+  class. After a run, passing classes fold to one line and failing ones
+  open.
 
 ## Features
 
-- Run the selected root, project, class, method or test; `A` runs everything, as does running the root, `F` re-runs only what failed; runs queue up, one `dotnet test` per project
+- Run the selected root, project, class, method or test; `A` and running the root both run the whole solution in one `dotnet test`, `F` re-runs only what failed; anything smaller is one `dotnet test` per project, and runs queue up
 - Live status while tests run: the project row spins and everything running beneath it turns cyan, tests waiting in a queued run are greyed out behind an hourglass, ⧗; ✓ × ↓ arrive as each result comes in; projects, classes and theories carry a fold arrow (▾ / ▸) in the colour of their status, with counts and durations rolled up
 - Open the selected test in Neovim, either a running instance (via the socket in `$nvim_sock`) or one launched in place; a failed test opens at the failing line
 - Filter the tree by test or project name as you type, or narrow it to the failed (`f`) or skipped (`s`) tests
@@ -123,8 +129,8 @@ Press `?` in the app for this list.
 | `l` / `h` | Expand / collapse a project, class or theory (`h` on a collapsed node selects its parent) |
 | `L` / `H` | Expand / collapse the whole tree |
 | `space` | Toggle a fold |
-| `enter`, `r` | Run the selected project, class or test |
-| `A` | Run every project |
+| `enter`, `r` | Run the selected node; on the root that is the whole solution in one `dotnet test` |
+| `A` | Run the whole solution, the same as running the root |
 | `F` | Re-run only the failed tests |
 | `f` / `s` | Show only the failed / skipped tests |
 | `a` | Show all tests again (`esc` does too) |
@@ -146,8 +152,8 @@ Durations are `0.032s` below a second, `1.5s` below ten, `35s` below a
 minute, then `2m34s`. They are coloured as vitest colours them: green up to
 300ms, yellow beyond it, so slow tests stand out, with the unit in a faded
 shade of the number's own colour. A group shows the sum of its tests' times,
-and so does the summary's Duration, over the last batch of runs. Neither
-counts the time spent outside the tests themselves.
+and so does the summary row, over the last batch of runs. Neither counts the
+time spent outside the tests themselves.
 
 ## Neovim
 
@@ -208,7 +214,7 @@ with `.github/scripts/next-version.sh`.
 ```
 main.go              flags, target discovery, tea.NewProgram
 internal/dotnet      solution/project discovery, --list-tests, streamed runs, TRX parsing, source lookup, filters
-internal/tree        root → project → class → method → case nodes, status roll-up, durations, folding, visible rows
+internal/tree        solution → project → class → method → case nodes, status roll-up, durations, folding, visible rows
 internal/editor      Neovim hand-off (--remote-expr + tmux) and in-terminal launch
 internal/ui          the bubbletea model: three panes, keys, summary and status, output colouring
 ```

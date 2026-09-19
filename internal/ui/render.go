@@ -14,42 +14,31 @@ import (
 )
 
 const (
-	headerH      = 1
-	titleH       = 1  // each pane has a title line
-	minTreeShare = 65 // percent of the width the tree must keep for the stats to show
+	headerH = 1
+	titleH  = 1 // each pane has a title line
+	statsH  = 1 // the summary row above the tree
+	statusH = 1 // the status line along the bottom of the screen
 )
 
 // geometry is the current pane arrangement.
 type geometry struct {
-	logH    int // log pane body height (top, full width)
-	bottomH int // bottom pane body height
-	treeW   int // width left for the tree beside the summary
-	statsW  int // width of the summary beside the tree; 0 when it does not fit
+	logH  int // log pane body height (top, full width)
+	treeH int // tree height, below the summary row
 }
 
-// layout splits the window: the log takes about 70% of the height; the
-// bottom pane holds the tree with the summary along its right-hand side.
+// layout splits the window: what is left over once the header, the two pane
+// titles, the summary row and the status line have their rows is split
+// between the panes, the log taking about 70% of it. Both run the full
+// width.
 func (m *Model) layout() geometry {
-	body := max(4, m.height-headerH-2*titleH)
+	body := max(4, m.height-headerH-2*titleH-statsH-statusH)
 	g := geometry{}
 	g.logH = max(1, body*7/10)
-	g.bottomH = max(1, body-g.logH)
-	// The block is as wide as its summary lines; the state line on top is
-	// truncated to that, so a long label cannot shift the block. Unless the
-	// tree keeps at least minTreeShare of the width the block is hidden and
-	// the tree gets it all.
-	head, rows := m.statsLines()
-	for _, l := range append(rows, head[1:]...) {
-		g.statsW = max(g.statsW, ansi.StringWidth(l))
-	}
-	g.treeW = m.width - g.statsW - 2
-	if g.treeW*100 < m.width*minTreeShare {
-		g.treeW, g.statsW = m.width, 0
-	}
+	g.treeH = max(1, body-g.logH)
 	m.log.SetWidth(max(1, m.width))
 	m.log.SetHeight(g.logH)
-	m.treeView.SetWidth(max(1, g.treeW))
-	m.treeView.SetHeight(g.bottomH)
+	m.treeView.SetWidth(max(1, m.width))
+	m.treeView.SetHeight(g.treeH)
 	return g
 }
 
@@ -64,7 +53,7 @@ func (m *Model) View() tea.View {
 		top = lipgloss.JoinVertical(lipgloss.Left, m.paneTitle("Usage", true, m.width, ""), m.renderHelp(g.logH))
 	}
 	bottom := lipgloss.JoinVertical(lipgloss.Left, m.paneTitle(m.treeTitle(), m.focus == paneTree, m.width, ""), m.renderBottom(g))
-	content := lipgloss.JoinVertical(lipgloss.Left, m.renderHeader(), top, bottom)
+	content := lipgloss.JoinVertical(lipgloss.Left, m.renderHeader(), top, bottom, m.renderStatus())
 	v := tea.NewView(content)
 	v.AltScreen = true
 	v.MouseMode = tea.MouseModeCellMotion
@@ -101,25 +90,38 @@ func (m *Model) logPosition() string {
 	return fmt.Sprintf("%d/%d", m.logCursor+1, len(m.logLines))
 }
 
-// outputFor picks the raw dotnet output to show for a node: its own
-// project's, or, for the root, whichever project ran most recently, falling
-// back to the build log.
+// outputFor picks the raw dotnet output to show for a node: the run it came
+// from, which is its own project's or, after a solution-wide run, the
+// root's. A node no run has covered falls back to whatever ran last, and
+// then to the build log.
 func (m *Model) outputFor(n *tree.Node) (key, name string) {
-	var p *tree.Node
-	if n != nil {
-		p = n.Project()
-	}
-	if p == nil && n != nil {
-		for _, c := range m.tree.Projects {
-			if c.Path == m.lastLog {
-				p = c
-			}
+	for c := n; c != nil; c = c.Parent {
+		if c.Path != "" && m.logs[c.Path] != nil {
+			return c.Path, c.Name
 		}
 	}
-	if p != nil && m.logs[p.Path] != nil {
-		return p.Path, p.Name
+	if n != nil && m.logs[m.lastLog] != nil {
+		if c := m.nodeByPath(m.lastLog); c != nil {
+			return c.Path, c.Name
+		}
 	}
 	return buildLogKey, "build"
+}
+
+// nodeByPath is the root or the project that `dotnet test` was pointed at.
+func (m *Model) nodeByPath(path string) *tree.Node {
+	if path == "" || path == buildLogKey {
+		return nil
+	}
+	if m.tree.Root.Path == path {
+		return m.tree.Root
+	}
+	for _, p := range m.tree.Projects {
+		if p.Path == path {
+			return p
+		}
+	}
+	return nil
 }
 
 func (m *Model) logTitle() string {
@@ -272,8 +274,9 @@ func (m *Model) refreshLog() {
 }
 
 // renderNodeLog is the minimal log for a node: build errors first, then
-// for a test its result, message, stack trace and output; for a group its
-// passed / failed / skipped tally and every failure beneath it.
+// for a test its result, message, stack trace and output; for a group every
+// failure beneath it. The group's tally is not repeated here, since the row
+// it is selected from carries it.
 func (m *Model) renderNodeLog(n *tree.Node) []string {
 	var lines []string
 	if errs := buildErrors(m.logs[buildLogKey]); len(errs) > 0 {
@@ -291,12 +294,14 @@ func (m *Model) renderNodeLog(n *tree.Node) []string {
 		return append(lines, m.renderLeafLog(n)...)
 	}
 	c := n.Counts()
-	head := "  " + m.statusIcon(n.Status()) + " " + styleBold.Render(breadcrumb(n))
-	if d := n.Duration(); d > 0 {
+	status := n.Status()
+	head := "  " + statusIcon(status) + " " + styleBold.Render(breadcrumb(n))
+	// A time only goes up once its tests have all reported: until then it
+	// would be a running total pretending to be a result.
+	if d := n.Duration(); d > 0 && !inFlight(status) {
 		head += " " + renderDuration(d)
 	}
-	// Then the section's tally, as the summary prints it.
-	lines = append(lines, head, "    "+strings.Join(summaryParts(c, true), styleDim.Render(" | ")))
+	lines = append(lines, head)
 	var failed []*tree.Node
 	for _, l := range n.Leaves() {
 		if l.Status() == tree.StatusFailed && l.Result != nil {
@@ -310,7 +315,7 @@ func (m *Model) renderNodeLog(n *tree.Node) []string {
 			lines = append(lines, m.renderFailure(l, false)...)
 		}
 	case c.Running > 0, c.Queued > 0:
-		// The tally above already says how many are running or queued.
+		// Nothing to report yet; the glyph in the header says it is going.
 	case c.Passed+c.Skipped > 0:
 		lines = append(lines, "", "  "+stylePassed.Render(iconPassed+" No failed tests."))
 	default:
@@ -322,9 +327,9 @@ func (m *Model) renderNodeLog(n *tree.Node) []string {
 // renderLeafLog describes one test's latest result.
 func (m *Model) renderLeafLog(n *tree.Node) []string {
 	r := n.Result
-	head := "  " + m.statusIcon(n.Status()) + " " + styleBold.Render(breadcrumb(n))
+	head := "  " + statusIcon(n.Status()) + " " + styleBold.Render(breadcrumb(n))
 	switch {
-	case n.Status() == tree.StatusRunning, n.Status() == tree.StatusQueued:
+	case inFlight(n.Status()):
 		return []string{head} // the glyph in the header says it all
 	case r == nil:
 		return []string{head, "", styleDim.Render("  Not run yet. Press enter to run it, o to open it in nvim.")}
@@ -342,6 +347,12 @@ func (m *Model) renderLeafLog(n *tree.Node) []string {
 		lines = append(lines, "  "+stylePassed.Render(iconPassed+" Passed in "+formatDuration(r.Duration)))
 	}
 	return append(lines, outputLines(r.Output)...)
+}
+
+// inFlight reports whether a node's tests are still running or waiting to,
+// so nothing about them is settled yet.
+func inFlight(s tree.Status) bool {
+	return s == tree.StatusRunning || s == tree.StatusQueued
 }
 
 // renderFailure is one failed test: FAIL badge and breadcrumb, the message
@@ -402,20 +413,10 @@ func highlight(line string, width int, focused bool) string {
 	return bg + s + "\x1b[0m"
 }
 
-// renderBottom draws the tree with the summary beside it: the block sits
-// flush with the right edge of the pane, and its own lines are left-aligned
-// within it, labels down one edge and values in a column.
+// renderBottom is the summary row with the tree beneath it, both the full
+// width of the window.
 func (m *Model) renderBottom(g geometry) string {
-	tree := m.treeView.View()
-	if g.statsW == 0 {
-		return tree
-	}
-	head, rows := m.statsLines()
-	stats := fitStats(head, rows, g.bottomH)
-	for i, l := range stats {
-		stats[i] = fit(ansi.Truncate(l, g.statsW, "…"), g.statsW)
-	}
-	return lipgloss.JoinHorizontal(lipgloss.Top, tree, "  ", strings.Join(stats, "\n"))
+	return lipgloss.JoinVertical(lipgloss.Left, m.statsLine(), m.treeView.View())
 }
 
 // treeGuides draws the branch lines down the left of the tree, one per row:
@@ -556,7 +557,7 @@ func (m *Model) treeIcon(n *tree.Node) string {
 		return styleRunning.Render(m.arrow(n))
 	}
 	if n.IsLeaf() {
-		return m.statusIcon(status)
+		return statusIcon(status)
 	}
 	switch status {
 	case tree.StatusQueued:
@@ -579,10 +580,13 @@ func (m *Model) arrow(n *tree.Node) string {
 	return iconClosed
 }
 
-func (m *Model) statusIcon(s tree.Status) string {
+// statusIcon is a node's glyph outside the tree. It never spins: the log
+// header sits still while its lines are read, and the tree is where a run
+// shows its progress.
+func statusIcon(s tree.Status) string {
 	switch s {
 	case tree.StatusRunning:
-		return m.spin.View()
+		return styleRunning.Render(iconNone)
 	case tree.StatusQueued:
 		return styleQueued.Render(iconQueued)
 	case tree.StatusPassed:
@@ -628,51 +632,26 @@ func (m *Model) renderHeader() string {
 	return fit(line, m.width)
 }
 
-// fitStats makes the stats block exactly height rows: the head (what dtest
-// is doing, and what the solution holds) stays at the top of the pane, and
-// the run summary hangs from the bottom of whatever is left. When the rows
-// do not fit, the blank spacers go first, then rows from the bottom, so the
-// hint survives on a short terminal.
-func fitStats(head, rows []string, height int) []string {
-	if height <= len(head) {
-		return head[:max(0, height)]
-	}
-	out := make([]string, 0, height)
-	return append(append(out, head...), fitBottom(rows, height-len(head))...)
+// statsLine is the one row above the tree: how the last batch of runs went,
+// with the key hint at the right edge.
+func (m *Model) statsLine() string {
+	return fitLine(" "+m.summary(), styleDim.Render("press ? for help"), m.width)
 }
 
-// fitBottom pads or trims stats to exactly height rows, keeping the last
-// one (the hint) and dropping blank spacers before real rows.
-func fitBottom(stats []string, height int) []string {
-	if len(stats) > height {
-		var compact []string
-		for _, l := range stats {
-			if l != "" {
-				compact = append(compact, l)
-			}
-		}
-		stats = compact
-	}
-	if len(stats) > height && height > 0 {
-		hint := stats[len(stats)-1]
-		stats = append(stats[:height-1:height-1], hint)
-	}
-	for len(stats) < height {
-		stats = append([]string{""}, stats...)
-	}
-	return stats
+// renderStatus is the last line of the screen: what dtest is doing, or a
+// message about what just happened. It is blank the rest of the time, and
+// always there, so nothing above it moves when a message arrives.
+func (m *Model) renderStatus() string {
+	return fit(" "+m.stateLine(), m.width)
 }
 
-// statsLines is the block beside the tree, in two parts. The head stays at
-// the top of the pane: what dtest is doing, then how many test projects the
-// solution holds. The rest hangs from the bottom and describes the last
-// batch of runs: how many tests it covered, how they turned out, when it
-// started and how long its tests took, then the key hint. The total number
-// of tests is not here; the root of the tree carries it. Every row is
-// always present so the block never changes shape.
-func (m *Model) statsLines() (head, rows []string) {
-	// Failures are left out of the project tally: this row says what the
-	// solution holds, and the run summary below is where failures belong.
+// summary reports the solution's test projects, then how the tests of the
+// last batch of runs turned out, when it started and how long those tests
+// took. While a batch is still going it says only that: a tally that grows
+// as results land invites reading half a run as the whole of it, and the
+// tree is where progress belongs. The number of tests in the solution is
+// not here either; the root of the tree carries it.
+func (m *Model) summary() string {
 	var pc tree.Counts
 	for _, p := range m.tree.Projects {
 		pc.Total++
@@ -683,50 +662,31 @@ func (m *Model) statsLines() (head, rows []string) {
 			pc.Skipped++
 		}
 	}
-	start, dur := styleDim.Render("–"), styleDim.Render("–")
-	if !m.batchStart.IsZero() {
-		start = m.batchStart.Format("15:04:05")
-		dur = formatDuration(m.batchDuration())
-	}
-	count := func(n int, style lipgloss.Style) string {
-		if n == 0 {
-			return styleDim.Render("0")
-		}
-		return style.Bold(true).Render(fmt.Sprint(n))
-	}
+	bar := styleDim.Render(" | ")
+	parts := []string{styleDim.Render("Projects ") + strings.Join(summaryParts(pc), bar)}
 	ran := m.batchCounts()
-	head = []string{
-		m.stateLine(),
-		summaryLabel("Test Projects") + strings.Join(summaryParts(pc, false), styleDim.Render(" | ")),
+	switch {
+	case m.batchStart.IsZero():
+		parts = append(parts, styleDim.Render("nothing run yet"))
+	case m.runInFlight(), ran.Total == 0:
+		// A run in flight reports nothing at all. A tally and a time that
+		// grow as results land invite reading half a run as the whole of it,
+		// and the tree is where progress belongs.
+	default:
+		// What the batch was, then how it went. The clock time is a
+		// footnote, so it stays grey; how long the tests took is worth a
+		// glance, so it gets a quiet cyan.
+		parts = append(parts, styleDim.Render("Ran "+testCount(ran.Total)+" in ")+
+			styleElapsed.Render(formatDuration(m.batchDuration()))+
+			styleDim.Render(" at "+m.batchStart.Format("15:04:05")))
+		parts = append(parts, strings.Join(outcomeParts(ran), bar))
 	}
-	rows = []string{
-		summaryLabel("Tests") + count(ran.Total, lipgloss.NewStyle()),
-		summaryLabel("Failed") + count(ran.Failed, styleFailed),
-		summaryLabel("Skipped") + count(ran.Skipped, styleSkipped),
-		summaryLabel("Passed") + count(ran.Passed, stylePassed),
-		summaryLabel("Start at") + start,
-		summaryLabel("Duration") + dur,
-		"",
-		styleDim.Render("press ? to show help, press q to quit"),
-	}
-	return head, rows
+	return strings.Join(parts, styleDim.Render("  ·  "))
 }
 
-// summaryLabelW is the width of the summary's label column: the longest
-// label, left-aligned, plus two spaces. Left-aligning gives the block a
-// straight edge down the side it starts on, with the values in a column.
-const summaryLabelW = 16
-
-func summaryLabel(s string) string {
-	return styleDim.Render(fmt.Sprintf("%-*s", summaryLabelW-2, s)) + "  "
-}
-
-// summaryParts is vitest's "1 failed | 1 passed | 2 skipped (4)" as its
-// pieces, listing only the non-zero groups, each bold in its colour, with
-// the total attached to the last one. With notRun the tests without a
-// result are counted too (running ones included, so the line does not keep
-// changing during a run); the bottom summary leaves them out.
-func summaryParts(c tree.Counts, notRun bool) []string {
+// outcomeParts lists the non-zero outcomes of a tally, each bold in its
+// colour: "1 failed", "46 passed", "2 skipped".
+func outcomeParts(c tree.Counts) []string {
 	var parts []string
 	if c.Failed > 0 {
 		parts = append(parts, styleFailed.Bold(true).Render(fmt.Sprintf("%d failed", c.Failed)))
@@ -737,9 +697,14 @@ func summaryParts(c tree.Counts, notRun bool) []string {
 	if c.Skipped > 0 {
 		parts = append(parts, styleSkipped.Bold(true).Render(fmt.Sprintf("%d skipped", c.Skipped)))
 	}
-	if rest := c.Total - c.Failed - c.Passed - c.Skipped; notRun && rest > 0 {
-		parts = append(parts, styleDim.Render(fmt.Sprintf("%d not run", rest)))
-	}
+	return parts
+}
+
+// summaryParts is vitest's "1 failed | 1 passed | 2 skipped (4)" as its
+// pieces, with the total attached to the last one, or the total alone when
+// nothing has an outcome yet.
+func summaryParts(c tree.Counts) []string {
+	parts := outcomeParts(c)
 	if len(parts) == 0 {
 		return []string{styleDim.Render(fmt.Sprintf("(%d)", c.Total))}
 	}
@@ -749,8 +714,7 @@ func summaryParts(c tree.Counts, notRun bool) []string {
 
 // stateLine is what dtest is doing: a status message, or building or
 // listing as plain text. It is empty otherwise, before, during and after
-// runs: the tree's spinners and the stacked counts already say it, and
-// changing text here made the block jump.
+// runs, since the tree's spinner and the summary row already say it.
 func (m *Model) stateLine() string {
 	switch {
 	case m.status != "":

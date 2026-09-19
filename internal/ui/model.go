@@ -48,12 +48,13 @@ const (
 	buildLogKey   = "build"
 )
 
-// runRequest is one queued `dotnet test` invocation.
+// runRequest is one queued `dotnet test` invocation. The target is what the
+// command is pointed at: a project, or the root, which is the solution.
 type runRequest struct {
-	project *tree.Node
-	filter  string
-	label   string       // shown while running
-	leaves  []*tree.Node // marked running until results arrive
+	target *tree.Node
+	filter string
+	label  string       // shown while running
+	leaves []*tree.Node // marked running until results arrive
 }
 
 // activeRun is the invocation in progress.
@@ -127,7 +128,7 @@ func New(cfg Config) *Model {
 		cfg:       cfg,
 		name:      name,
 		socket:    editor.ResolveSocket(cfg.Socket),
-		tree:      tree.New(),
+		tree:      tree.New(name, cfg.Target),
 		logs:      map[string][]string{},
 		locations: map[string]dotnet.Location{},
 		spin:      spinner.New(spinner.WithSpinner(spinner.MiniDot), spinner.WithStyle(styleRunning)),
@@ -157,8 +158,8 @@ type (
 		err     error
 	}
 	runEventMsg struct {
-		project *tree.Node
-		event   dotnet.Event
+		target *tree.Node
+		event  dotnet.Event
 	}
 	statusClearMsg struct{ id int }
 	editorDoneMsg  struct{ err error }
@@ -220,6 +221,10 @@ func (m *Model) startListing() tea.Cmd {
 	}
 	return tea.Batch(cmds...)
 }
+
+// runInFlight reports whether a batch of runs is still going: one running,
+// or more waiting behind it.
+func (m *Model) runInFlight() bool { return m.run != nil || len(m.queue) > 0 }
 
 // busy reports whether dotnet is doing something on our behalf.
 func (m *Model) busy() bool {
@@ -338,14 +343,22 @@ func (m *Model) setStatus(text string, isErr bool) tea.Cmd {
 // enqueue queues a run for each project that nodes belong to and starts the
 // first when nothing else is running.
 func (m *Model) enqueue(nodes []*tree.Node) tea.Cmd {
-	// Nothing running means this starts a new batch, so the summary beside
+	// Nothing running means this starts a new batch, so the summary above
 	// the tree describes these runs and not the last ones.
 	if m.run == nil {
 		m.batchStart, m.batch = now(), nil
 	}
+	// The root is the solution, so running it is one `dotnet test` over the
+	// whole thing rather than one invocation per project.
+	for _, n := range nodes {
+		if n.Kind == tree.KindRoot {
+			m.queueRun(runRequest{target: n, leaves: n.Leaves(), label: n.Name + " › all"})
+			return m.pump()
+		}
+	}
 	byProject := map[*tree.Node][]*tree.Node{}
 	var order []*tree.Node
-	for _, n := range expandRoots(nodes) {
+	for _, n := range nodes {
 		p := n.Project()
 		if _, ok := byProject[p]; !ok {
 			order = append(order, p)
@@ -353,7 +366,7 @@ func (m *Model) enqueue(nodes []*tree.Node) tea.Cmd {
 		byProject[p] = append(byProject[p], n)
 	}
 	for _, p := range order {
-		req := runRequest{project: p}
+		req := runRequest{target: p}
 		var filters, labels []string
 		for _, n := range byProject[p] {
 			req.leaves = append(req.leaves, n.Leaves()...)
@@ -367,17 +380,21 @@ func (m *Model) enqueue(nodes []*tree.Node) tea.Cmd {
 		}
 		req.filter = dotnet.JoinFilters(filters)
 		req.label = p.Name + " › " + strings.Join(labels, ", ")
-		// Tests waiting for their run show as queued; ones already running
-		// (another request for the same project) keep spinning.
-		for _, l := range req.leaves {
-			if l.Status() != tree.StatusRunning {
-				l.SetStatus(tree.StatusQueued)
-			}
-		}
-		m.addToBatch(req.leaves...)
-		m.queue = append(m.queue, req)
+		m.queueRun(req)
 	}
 	return m.pump()
+}
+
+// queueRun adds a request to the queue and marks its tests as waiting. Ones
+// already running, from another request for the same tests, keep spinning.
+func (m *Model) queueRun(req runRequest) {
+	for _, l := range req.leaves {
+		if l.Status() != tree.StatusRunning {
+			l.SetStatus(tree.StatusQueued)
+		}
+	}
+	m.addToBatch(req.leaves...)
+	m.queue = append(m.queue, req)
 }
 
 // addToBatch records leaves as part of the batch in progress. A project and
@@ -431,20 +448,6 @@ func (m *Model) batchCounts() tree.Counts {
 	return c
 }
 
-// expandRoots replaces the root, which belongs to no single project, with
-// the projects beneath it, so running "All Tests" runs each of them.
-func expandRoots(nodes []*tree.Node) []*tree.Node {
-	out := make([]*tree.Node, 0, len(nodes))
-	for _, n := range nodes {
-		if n.Kind == tree.KindRoot {
-			out = append(out, n.Children...)
-			continue
-		}
-		out = append(out, n)
-	}
-	return out
-}
-
 // dropQueue forgets the queued runs and clears their tests' queued marks.
 func (m *Model) dropQueue() {
 	for _, req := range m.queue {
@@ -470,33 +473,33 @@ func (m *Model) pump() tea.Cmd {
 	ctx, cancel := context.WithCancel(context.Background())
 	ch := make(chan tea.Msg, 256)
 	m.run = &activeRun{req: req, cancel: cancel, events: ch}
-	m.logs[req.project.Path] = nil
-	m.lastLog = req.project.Path
-	project, opts := req.project, m.cfg.Options
+	m.logs[req.target.Path] = nil
+	m.lastLog = req.target.Path
+	target, opts := req.target, m.cfg.Options
 	go func() {
-		runTests(ctx, project.Path, req.filter, opts, func(e dotnet.Event) { ch <- runEventMsg{project: project, event: e} })
+		runTests(ctx, target.Path, req.filter, opts, func(e dotnet.Event) { ch <- runEventMsg{target: target, event: e} })
 	}()
 	m.refresh()
 	return waitMsg(ch)
 }
 
 func (m *Model) handleRunEvent(msg runEventMsg) tea.Cmd {
-	if m.run == nil || msg.project != m.run.req.project {
+	if m.run == nil || msg.target != m.run.req.target {
 		return nil
 	}
-	key := msg.project.Path
+	key := msg.target.Path
 	switch e := msg.event.(type) {
 	case dotnet.LineEvent:
 		m.logs[key] = append(m.logs[key], e.Text)
 		return waitMsg(m.run.events) // drawn on the next spinner tick
 
 	case dotnet.ResultEvent:
-		m.apply(msg.project, e.Result)
+		m.apply(msg.target, e.Result)
 		return waitMsg(m.run.events)
 
 	case dotnet.DoneEvent:
 		for _, r := range e.Results {
-			m.apply(msg.project, r)
+			m.apply(msg.target, r)
 		}
 		for _, l := range m.run.req.leaves {
 			if l.Status() == tree.StatusRunning {
@@ -506,7 +509,7 @@ func (m *Model) handleRunEvent(msg runEventMsg) tea.Cmd {
 		label := m.run.req.label
 		m.run.cancel()
 		m.run = nil
-		m.tree.FoldByResult(msg.project)
+		m.tree.FoldByResult(msg.target)
 		var cmd tea.Cmd
 		if e.Err != nil {
 			m.dropQueue()
@@ -522,9 +525,13 @@ func (m *Model) handleRunEvent(msg runEventMsg) tea.Cmd {
 }
 
 // apply records one result on its leaf, creating the leaf for a test that
-// was not listed.
-func (m *Model) apply(project *tree.Node, r dotnet.Result) {
-	leaf := m.tree.Leaf(project, r.Name)
+// was not listed. A solution-wide run reports tests from every project, so
+// the tree decides which one each belongs to.
+func (m *Model) apply(target *tree.Node, r dotnet.Result) {
+	leaf := m.tree.LeafIn(target, r.Name)
+	if leaf == nil {
+		return
+	}
 	m.addToBatch(leaf) // it may not have been listed, so not queued either
 	res := r
 	leaf.Result = &res
@@ -651,10 +658,8 @@ func locationInLine(line string) (dotnet.Location, bool) {
 // project, the class or method declaration otherwise, falling back to the
 // failure position from a stack trace.
 func (m *Model) locateNode(n *tree.Node) (dotnet.Location, bool) {
-	if n.Kind == tree.KindRoot {
-		return dotnet.Location{}, false // it spans every project
-	}
-	if n.Kind == tree.KindProject {
+	// The root is the solution file, a project is its own.
+	if n.Kind == tree.KindRoot || n.Kind == tree.KindProject {
 		return dotnet.Location{File: n.Path}, true
 	}
 	class, method := n.Class()

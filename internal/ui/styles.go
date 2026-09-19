@@ -23,6 +23,7 @@ var (
 	styleRule     = lipgloss.NewStyle().Foreground(colGrey).Faint(true)
 	styleQuick    = lipgloss.NewStyle().Foreground(colGreen)
 	styleSlow     = lipgloss.NewStyle().Foreground(colYellow)
+	styleElapsed  = lipgloss.NewStyle().Foreground(colCyan).Faint(true)
 	styleBold     = lipgloss.NewStyle().Bold(true)
 	styleKey      = lipgloss.NewStyle().Foreground(colCyan).Bold(true)
 	styleCommand  = lipgloss.NewStyle().Foreground(colCyan)

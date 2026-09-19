@@ -1,5 +1,5 @@
-// Package tree arranges tests into root → project → class → method → case
-// nodes and tracks their status.
+// Package tree arranges tests into solution → project → class → method →
+// case nodes and tracks their status.
 package tree
 
 import (
@@ -193,13 +193,11 @@ type Tree struct {
 	leaves   map[*Node]map[string]*Node // by project, then display name
 }
 
-// RootName labels the node above every project.
-const RootName = "All Tests"
-
-// New returns an empty tree.
-func New() *Tree {
+// New returns an empty tree whose root stands for the solution (or the lone
+// project) at path, named name.
+func New(name, path string) *Tree {
 	return &Tree{
-		Root:   &Node{Kind: KindRoot, Name: RootName, FQN: RootName, Expanded: true},
+		Root:   &Node{Kind: KindRoot, Name: name, FQN: name, Path: path, Expanded: true},
 		leaves: map[*Node]map[string]*Node{},
 	}
 }
@@ -275,6 +273,35 @@ func (t *Tree) Leaf(project *Node, name string) *Node {
 	}
 	t.leaves[project][name] = leaf
 	return leaf
+}
+
+// LeafIn returns the leaf to record a result on, for a run of target. A
+// project's run keeps its results under that project. The root's run covers
+// the whole solution, so each result goes to whichever project listed that
+// test; one that was listed nowhere is filed under the project whose name
+// its own prefixes, since that is how test names are namespaced.
+func (t *Tree) LeafIn(target *Node, name string) *Node {
+	if target.Kind == KindProject {
+		return t.Leaf(target, name)
+	}
+	for _, p := range t.Projects {
+		if n, ok := t.leaves[p][name]; ok {
+			return n
+		}
+	}
+	var best *Node
+	for _, p := range t.Projects {
+		if strings.HasPrefix(name, p.Name+".") && (best == nil || len(p.Name) > len(best.Name)) {
+			best = p
+		}
+	}
+	if best == nil {
+		if len(t.Projects) == 0 {
+			return nil
+		}
+		best = t.Projects[0]
+	}
+	return t.Leaf(best, name)
 }
 
 // Lookup returns the leaf for the test with display name under project,
@@ -419,13 +446,13 @@ func appendMatching(rows []*Node, n *Node, q string, status Status) []*Node {
 // Leaves returns every leaf of the tree in order.
 func (t *Tree) Leaves() []*Node { return t.Root.Leaves() }
 
-// FoldByResult expands the interior nodes under project that hold a failure
+// FoldByResult expands the interior nodes under target that hold a failure
 // and collapses the rest, so a finished run reads like a report: passing
 // classes take one line, failing ones show their tests.
-func (t *Tree) FoldByResult(project *Node) {
-	for _, n := range collect(project) {
-		if n.Kind == KindProject || n.IsLeaf() {
-			continue
+func (t *Tree) FoldByResult(target *Node) {
+	for _, n := range collect(target) {
+		if n.Kind <= KindProject || n.IsLeaf() {
+			continue // the root and the projects keep their own folding
 		}
 		n.Expanded = n.Counts().Failed > 0
 	}
