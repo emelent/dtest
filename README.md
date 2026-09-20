@@ -287,9 +287,10 @@ socket paths to about 100 characters, so keep the socket under `/tmp`.
 
 ## Try it
 
-`sample/` holds a small solution to play with: a library and two xUnit
-projects whose tests are spread over several folders (namespaces), with
-theories, three deliberate failures, two skipped tests and a few slow tests.
+`sample/` holds a solution to play with: nine libraries and ten xUnit
+projects, about 155 tests spread over several folders (namespaces) each, with
+theories, six deliberate failures, five skipped tests and a few slow tests.
+Six of the ten projects are green, so the tree has a mix to look at.
 
 ```sh
 make build

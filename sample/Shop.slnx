@@ -1,9 +1,25 @@
 <Solution>
   <Folder Name="/src/">
+    <Project Path="src/Shop.Catalog/Shop.Catalog.csproj" />
     <Project Path="src/Shop.Core/Shop.Core.csproj" />
+    <Project Path="src/Shop.Identity/Shop.Identity.csproj" />
+    <Project Path="src/Shop.Infrastructure/Shop.Infrastructure.csproj" />
+    <Project Path="src/Shop.Notifications/Shop.Notifications.csproj" />
+    <Project Path="src/Shop.Payments/Shop.Payments.csproj" />
+    <Project Path="src/Shop.Reporting/Shop.Reporting.csproj" />
+    <Project Path="src/Shop.Search/Shop.Search.csproj" />
+    <Project Path="src/Shop.Shipping/Shop.Shipping.csproj" />
   </Folder>
   <Folder Name="/tests/">
     <Project Path="tests/Shop.Api.Tests/Shop.Api.Tests.csproj" />
+    <Project Path="tests/Shop.Catalog.Tests/Shop.Catalog.Tests.csproj" />
     <Project Path="tests/Shop.Core.Tests/Shop.Core.Tests.csproj" />
+    <Project Path="tests/Shop.Identity.Tests/Shop.Identity.Tests.csproj" />
+    <Project Path="tests/Shop.Infrastructure.Tests/Shop.Infrastructure.Tests.csproj" />
+    <Project Path="tests/Shop.Notifications.Tests/Shop.Notifications.Tests.csproj" />
+    <Project Path="tests/Shop.Payments.Tests/Shop.Payments.Tests.csproj" />
+    <Project Path="tests/Shop.Reporting.Tests/Shop.Reporting.Tests.csproj" />
+    <Project Path="tests/Shop.Search.Tests/Shop.Search.Tests.csproj" />
+    <Project Path="tests/Shop.Shipping.Tests/Shop.Shipping.Tests.csproj" />
   </Folder>
 </Solution>
