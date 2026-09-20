@@ -6,6 +6,9 @@ test runners — vitest and jest. `dtest` is a Go TUI built on
 `dotnet` CLI: it builds once, lists every test, and runs whatever you select
 while the screen updates live.
 
+> **This code is entirely AI generated.** Every line of it — the Go, the tests,
+> the sample solution and this README — was written by Claude Code.
+
 ```
   DTEST  Shop                                                                                       press ? for help
 ⎯⎯ Log  Shop.Api.Tests ⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯
